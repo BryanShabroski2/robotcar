@@ -86,8 +86,8 @@ volatile bool showGray = false;
 volatile bool showBlackWhite = false;
 volatile bool showShrinked = false;
 
-#define SHRUNK_W 32
-#define SHRUNK_H 24
+#define SHRUNK_W 64
+#define SHRUNK_H 48
 
 static struct pixel_format_RGB g_shrunk_data[SHRUNK_W* SHRUNK_H];
 static pthread_mutex_t g_shrunk_data_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -175,7 +175,7 @@ struct laser_thread_param
     struct pixel_format_RGB       * scaled_RGB_data;
     unsigned int                    scaled_width;
     unsigned int                    scaled_height;
-}
+};
 
 
 struct camera_thread_param
@@ -621,9 +621,9 @@ void *Control(void * arg)
                       mode2 = false;
                       mode3 = true;
                       forward = false;
-                      backwards = false;
+                      backward = false;
                       stop = false;
-                      lineTracing = false
+                      lineTracing = false;
                       printf("Switched to Mode 3\n");
                       modeSwitchFlag = false;
                       }
@@ -945,16 +945,16 @@ void *LaserThread(void *arg)
   struct thread_command cmd = {0, 0};
   struct timespec timer_state;
   wait_period_initialize(&timer_state);
+  
+  
+  //SAME AS VISUAL CROSSHAIR
+  //rows
+  int topEnd = 20;
+  int midEnd = 28;
+  //Columns
+  int leftEnd   = 24;
+  int centerEnd = 40;
 
-  // Boundaries for the 3×3 grid:
-  // Rows:
-  int topEnd = 10;  // y<10 => top, 10<=y<14 => mid, y>=14 => bottom
-  int midEnd = 14;
-  // Columns:
-  int leftEnd   = 14;  // x<14 => left
-  int centerEnd = 18;  // 14<=x<18 => center, x>=18 => right
-
-  speed = 30;
 
   while (!*(param->quit_flag))
   {
@@ -1023,16 +1023,18 @@ void *LaserThread(void *arg)
               case BOX_BOTTOM_LEFT:
                   printf("Laser in Left\n");
                   if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
+                      forward = false;
+                      backward = false;
                       cmd.command = 's';
                       FIFO_INSERT(param->motor1Fifo, cmd);
                       FIFO_INSERT(param->motor2Fifo, cmd);
                       wait_period(&timer_state, 60u);
 
-                      cmd.command = 'l';
+                      cmd.command = 't';
                       FIFO_INSERT(param->pwmFifo, cmd);
-                      cmd.command = 'w';
-                      FIFO_INSERT(param->motor1Fifo, cmd);
                       cmd.command = 'x';
+                      FIFO_INSERT(param->motor1Fifo, cmd);
+                      cmd.command = 'w';
                       FIFO_INSERT(param->motor2Fifo, cmd);
                       wait_period(&timer_state, 100u);
 
@@ -1048,12 +1050,14 @@ void *LaserThread(void *arg)
               case BOX_BOTTOM_RIGHT:
                   printf("Laser in Right\n");
                   if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
+                    forward = false;
+                    backward = false;
                       cmd.command = 's';
                       FIFO_INSERT(param->motor1Fifo, cmd);
                       FIFO_INSERT(param->motor2Fifo, cmd);
                       wait_period(&timer_state, 60u);
 
-                      cmd.command = 'l';
+                      cmd.command = 't';
                       FIFO_INSERT(param->pwmFifo, cmd);
                       cmd.command = 'w';
                       FIFO_INSERT(param->motor1Fifo, cmd);
@@ -1070,7 +1074,9 @@ void *LaserThread(void *arg)
               //In top center go forward
               case BOX_TOP_CENTER:
                   printf("Laser in Top Center\n");
-                  if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
+                  if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo)) && !forward) {
+                      forward = true;
+                      backward = false;
                       cmd.command = 'w';
                       FIFO_INSERT(param->motor1Fifo, cmd);
                       FIFO_INSERT(param->motor2Fifo, cmd);
@@ -1090,7 +1096,9 @@ void *LaserThread(void *arg)
                   //Laser close to car move backwards
               case BOX_BOTTOM_CENTER:
                   printf("Laser in Bottom Center\n");
-                  if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
+                  if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo)) && !backward) {
+                      backward = true;
+                      forward = false;
                       cmd.command = 'x';
                       FIFO_INSERT(param->motor1Fifo, cmd);
                       FIFO_INSERT(param->motor2Fifo, cmd);
@@ -1098,6 +1106,10 @@ void *LaserThread(void *arg)
                   break;
           }
       }
+      else{                    
+        cmd.command = 's';
+        FIFO_INSERT(param->motor1Fifo, cmd);
+        FIFO_INSERT(param->motor2Fifo, cmd);}
 
       wait_period(&timer_state, 10u);
   }
@@ -1112,7 +1124,6 @@ void *LineTraceThread(void *arg)
     struct thread_command cmd2 = {0, 0};
     struct timespec timer_state;
     wait_period_initialize(&timer_state);
-    speed = 30;
     
     //Scan bottom rows
     int startRow = 20;
@@ -1146,8 +1157,9 @@ void *LineTraceThread(void *arg)
             pthread_mutex_unlock(&g_shrunk_data_lock2);
 
                 //Go forward if in threshold
-            if (abs(leftCount - rightCount) <= centerThreshold) {
+            if (abs(leftCount - rightCount) <= centerThreshold && !forward) {
                 if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
+                    forward = true;
                     cmd2.command = 'w';
                     FIFO_INSERT(param->motor1Fifo, cmd2);
                     FIFO_INSERT(param->motor2Fifo, cmd2);
@@ -1156,6 +1168,7 @@ void *LineTraceThread(void *arg)
             else if (leftCount > rightCount) {
                 //Turn left
                 if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
+                    forward = false;
                     cmd2.command = 's';
                     FIFO_INSERT(param->motor1Fifo, cmd2);
                     FIFO_INSERT(param->motor2Fifo, cmd2);
@@ -1177,6 +1190,7 @@ void *LineTraceThread(void *arg)
             else { //(Right count higher)
                 //Turn right
                 if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
+                    forward = false;
                     cmd2.command = 's';
                     FIFO_INSERT(param->motor1Fifo, cmd2);
                     FIFO_INSERT(param->motor2Fifo, cmd2);
@@ -1581,6 +1595,44 @@ void overlayCrosshair(struct pixel_format_RGB *buffer, unsigned int width, unsig
     }
 }
 
+void overlay3x3Grid(struct pixel_format_RGB *buffer, unsigned int width, unsigned int height)
+{
+    int topEnd    = 20;
+    int midEnd    = 28;
+    int leftEnd   = 24;
+    int centerEnd = 40;  
+
+    if (topEnd    >= (int)height) topEnd    = height - 1;
+    if (midEnd    >= (int)height) midEnd    = height - 1;
+    if (leftEnd   >= (int)width ) leftEnd   = width  - 1;
+    if (centerEnd >= (int)width ) centerEnd = width  - 1;
+
+    for (unsigned int x = 0; x < width; x++) {
+        buffer[topEnd * width + x].R = 255;
+        buffer[topEnd * width + x].G = 0;
+        buffer[topEnd * width + x].B = 0;
+    }
+    
+    for (unsigned int x = 0; x < width; x++) {
+        buffer[midEnd * width + x].R = 255;
+        buffer[midEnd * width + x].G = 0;
+        buffer[midEnd * width + x].B = 0;
+    }
+
+
+    for (unsigned int y = 0; y < height; y++) {
+        buffer[y * width + leftEnd].R = 255;
+        buffer[y * width + leftEnd].G = 0;
+        buffer[y * width + leftEnd].B = 0;
+    }
+
+    for (unsigned int y = 0; y < height; y++) {
+        buffer[y * width + centerEnd].R = 255;
+        buffer[y * width + centerEnd].G = 0;
+        buffer[y * width + centerEnd].B = 0;
+    }
+}
+
 
 
 void *DisplayThread(void *arg)
@@ -1604,8 +1656,8 @@ void *DisplayThread(void *arg)
     struct pixel_format_RGB *shrinkBuffer = malloc(numPixels * sizeof(struct pixel_format_RGB));
     struct pixel_format_RGB *shrinkBuffer2 = malloc(numPixels * sizeof(struct pixel_format_RGB));
   
-    const int targetWidth  = 32;
-    const int targetHeight = 24;
+    const int targetWidth  = 64;
+    const int targetHeight = 48;
     struct pixel_format_RGB *shrinkedData = malloc(targetWidth * targetHeight * sizeof(struct pixel_format_RGB));
     struct pixel_format_RGB *shrinkedData2 = malloc(targetWidth * targetHeight * sizeof(struct pixel_format_RGB));
     struct pixel_format_RGB *upscaledData = malloc(param->scaled_width * param->scaled_height * sizeof(struct pixel_format_RGB));
@@ -1707,7 +1759,7 @@ void *DisplayThread(void *arg)
                     
                     struct pixel_format_RGB spixel = shrinkBuffer[y2 * param->scaled_width + x2];
                     uint8_t gray = (spixel.R + spixel.G + spixel.B) / 3;
-                    uint8_t bw   = (gray > 220) ? 255 : 0;
+                    uint8_t bw   = (gray > 240) ? 255 : 0;
                     shrinkedData[y * targetWidth + x].R = bw;
                     shrinkedData[y * targetWidth + x].G = bw;
                     shrinkedData[y * targetWidth + x].B = bw;
@@ -1716,6 +1768,7 @@ void *DisplayThread(void *arg)
             pthread_mutex_lock(&g_shrunk_data_lock);
             memcpy(g_shrunk_data, shrinkedData, targetWidth * targetHeight * sizeof(struct pixel_format_RGB));
             pthread_mutex_unlock(&g_shrunk_data_lock);
+            overlay3x3Grid(shrinkedData, 64, 48);
             for (int y = 0; y < (int)param->scaled_height; y++) {
                 for (int x = 0; x < (int)param->scaled_width; x++) {
                     int u = x * targetWidth / param->scaled_width;
@@ -1736,7 +1789,7 @@ void *DisplayThread(void *arg)
                     
                     struct pixel_format_RGB spixel = shrinkBuffer2[y2 * param->scaled_width + x2];
                     uint8_t gray = (spixel.R + spixel.G + spixel.B) / 3;
-                    uint8_t bw   = (gray > 20) ? 255 : 0;
+                    uint8_t bw   = (gray > 30) ? 255 : 0;
                     shrinkedData2[y * targetWidth + x].R = bw;
                     shrinkedData2[y * targetWidth + x].G = bw;
                     shrinkedData2[y * targetWidth + x].B = bw;
@@ -1813,7 +1866,7 @@ int main( int argc, char * argv[] )
   struct control_thread_param   con_param   = {"con", &key_fifo, &motor1Fifo, &motor2Fifo, &pwmFifo, &quit_flag};
   struct line_trace_thread_param lineTraceParam = {"linetrace", &motor1Fifo, &motor2Fifo, &pwmFifo, &quit_flag, NULL, scaled_RGB_data, scaled_height, scaled_width};
   struct camera_thread_param cameraParam = {handle, scaled_data, scaled_RGB_data, scaled_height, scaled_width, &quit_flag, argc, argv, handle_GUI_color};
-  struct laser_thread_param laserParam = {"laser", &motor1Fifo, &motor2Fifo, &pwmFifo, &quit_flag, NULL, scaled_RGB_data, scaled_height, scaled_width}
+  struct laser_thread_param laserParam = {"laser", &motor1Fifo, &motor2Fifo, &pwmFifo, &quit_flag, NULL, scaled_RGB_data, scaled_height, scaled_width};
   
   if (io != NULL)
   {
