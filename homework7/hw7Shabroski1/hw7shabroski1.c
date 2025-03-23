@@ -315,7 +315,7 @@ void *Control(void * arg)
                               forward = false;
                               backward = false;
                               lineTracing = false;
-                              printf("Switched to Mode 2\n");
+                              printf("Switched to Mode 3\n");
                               modeSwitchFlag = false;
                          
                           }
@@ -522,7 +522,7 @@ void *Control(void * arg)
                   {
                       if (!stop)
                       {
-                          printf("Stopping in Mode 2!\n");
+                          printf("Stopping in Mode 3!\n");
                           stop = true;
                           lineTracing = false;
                           cmd2.command = 's';
@@ -585,7 +585,7 @@ void *Control(void * arg)
                   default:
                   {
                       modeSwitchFlag = false;
-                      printf("Ignored input: Mode 2 is active.\n");
+                      printf("Ignored input: Mode 3 is active.\n");
                     }
                       break;
               }
@@ -1011,7 +1011,6 @@ void *LaserThread(void *arg)
           {
               case BOX_NONE:
                   //No laser do nothing
-                  printf("No laser\n");
                   cmd.command = 's';
                   FIFO_INSERT(param->motor1Fifo, cmd);
                   FIFO_INSERT(param->motor2Fifo, cmd);
@@ -1023,8 +1022,6 @@ void *LaserThread(void *arg)
               case BOX_BOTTOM_LEFT:
                   printf("Laser in Left\n");
                   if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
-                      forward = false;
-                      backward = false;
                       cmd.command = 's';
                       FIFO_INSERT(param->motor1Fifo, cmd);
                       FIFO_INSERT(param->motor2Fifo, cmd);
@@ -1036,12 +1033,8 @@ void *LaserThread(void *arg)
                       FIFO_INSERT(param->motor1Fifo, cmd);
                       cmd.command = 'w';
                       FIFO_INSERT(param->motor2Fifo, cmd);
-                      wait_period(&timer_state, 100u);
-
-                      cmd.command = 'w';
-                      FIFO_INSERT(param->motor1Fifo, cmd);
-                      FIFO_INSERT(param->motor2Fifo, cmd);
-                  }
+                      wait_period(&timer_state, 30u);
+                    }
                   break;
 
               //In right boxes turn right
@@ -1050,8 +1043,6 @@ void *LaserThread(void *arg)
               case BOX_BOTTOM_RIGHT:
                   printf("Laser in Right\n");
                   if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
-                    forward = false;
-                    backward = false;
                       cmd.command = 's';
                       FIFO_INSERT(param->motor1Fifo, cmd);
                       FIFO_INSERT(param->motor2Fifo, cmd);
@@ -1063,48 +1054,43 @@ void *LaserThread(void *arg)
                       FIFO_INSERT(param->motor1Fifo, cmd);
                       cmd.command = 'x';
                       FIFO_INSERT(param->motor2Fifo, cmd);
-                      wait_period(&timer_state, 100u);
+                      wait_period(&timer_state, 30u);
 
-                      cmd.command = 'w';
-                      FIFO_INSERT(param->motor1Fifo, cmd);
-                      FIFO_INSERT(param->motor2Fifo, cmd);
                   }
                   break;
 
               //In top center go forward
               case BOX_TOP_CENTER:
                   printf("Laser in Top Center\n");
-                  if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo)) && !forward) {
-                      forward = true;
-                      backward = false;
+                  if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
                       cmd.command = 'w';
                       FIFO_INSERT(param->motor1Fifo, cmd);
                       FIFO_INSERT(param->motor2Fifo, cmd);
+                      wait_period(&timer_state, 50u);
                   }
                   break;
 
               //Laser centered do not move.
               case BOX_MID_CENTER:
-                  printf("Laser in Middleg\n");
+                  printf("Laser in Middle\n");
                   if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
                     cmd.command = 's';
                     FIFO_INSERT(param->motor1Fifo, cmd);
                     FIFO_INSERT(param->motor2Fifo, cmd);
+                    wait_period(&timer_state, 50u);
                 }
                   break;
               
                   //Laser close to car move backwards
               case BOX_BOTTOM_CENTER:
                   printf("Laser in Bottom Center\n");
-                  if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo)) && !backward) {
-                      backward = true;
-                      forward = false;
+                  if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
                       cmd.command = 'x';
                       FIFO_INSERT(param->motor1Fifo, cmd);
                       FIFO_INSERT(param->motor2Fifo, cmd);
                   }
                   break;
-          }
+                }
       }
       else{                    
         cmd.command = 's';
@@ -1112,10 +1098,12 @@ void *LaserThread(void *arg)
         FIFO_INSERT(param->motor2Fifo, cmd);}
 
       wait_period(&timer_state, 10u);
-  }
-
+        
+      }
+    
   printf("LaserThread done\n");
   return NULL;
+
 }
 
 void *LineTraceThread(void *arg)
@@ -1758,8 +1746,14 @@ void *DisplayThread(void *arg)
                     if (y2 >= (int)param->scaled_height) y2 = param->scaled_height - 1;
                     
                     struct pixel_format_RGB spixel = shrinkBuffer[y2 * param->scaled_width + x2];
-                    uint8_t gray = (spixel.R + spixel.G + spixel.B) / 3;
-                    uint8_t bw   = (gray > 240) ? 255 : 0;
+                    uint8_t r = spixel.R, g = spixel.G, b = spixel.B;
+                    uint8_t max_val = (r > g) ? ((r > b) ? r : b) : ((g > b) ? g : b);
+                    uint8_t min_val = (r < g) ? ((r < b) ? r : b) : ((g < b) ? g : b);
+
+                    float saturation = (max_val > 0) ? ((float)(max_val - min_val)) / max_val : 0.0;
+
+                    uint8_t bw = (max_val > 220 && (max_val - min_val) > 28 && saturation > 0.27) ? 255 : 0;
+
                     shrinkedData[y * targetWidth + x].R = bw;
                     shrinkedData[y * targetWidth + x].G = bw;
                     shrinkedData[y * targetWidth + x].B = bw;
@@ -1882,7 +1876,7 @@ int main( int argc, char * argv[] )
     pwmParam.gpio = io->gpio;
    
    
-    printf("\n\n\n Welcome!\n\n w: forward\n s: stop\n x:backward\n a: left 15 degrees\n d: right 15 degrees\n i: power up 5%\n j: power down 5%\nc: color image\nv: gray image\nb: black white image\nn: shrink image (black white)\n\n\n");
+    printf("\n\n\n Welcome!\n\n w: forward\n s: stop\n x:backward\n a: left \n d: right \n o: increase degrees \n k: decrease degrees \n \n i: power up 5%\n j: power down 5%\nc: color image\nv: gray image\nb: black white image\nn: shrink image (black white)\n\n\n");
 
     // Create three threads our threase and then join them once the q command is hit
     pthread_create(&tMotor1, NULL, Motor1Thread, (void *)&motor1Param);
