@@ -10,7 +10,8 @@
 * Manual control and camera line following with camera.
 *
 ***************************************************/
-
+//Added laser thread, laser thread param and stuff in main. Added mode3.
+//Added enumeration for box for laser.
 // header files - at /usr/include and ../include and .
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,6 +53,19 @@
 #define FIFO_LENGTH     1024
 #define THREE_QUARTERS  (FIFO_LENGTH*3/4)
 
+typedef enum {
+  BOX_NONE,
+  BOX_TOP_LEFT,
+  BOX_TOP_CENTER,
+  BOX_TOP_RIGHT,
+  BOX_MID_LEFT,
+  BOX_MID_CENTER,
+  BOX_MID_RIGHT,
+  BOX_BOTTOM_LEFT,
+  BOX_BOTTOM_CENTER,
+  BOX_BOTTOM_RIGHT
+} LaserBox;
+
 volatile bool forward = false;
 volatile bool backward = false;
 volatile bool stop = false;
@@ -59,6 +73,7 @@ volatile bool left = false;
 volatile bool right = false;
 volatile bool mode1 =  true;
 volatile bool mode2 = false;
+volatile bool mode3 = false;
 volatile bool lineTracing = false;
 volatile int speed = 50;
 volatile unsigned int angle = 30;
@@ -149,6 +164,18 @@ struct line_trace_thread_param
     unsigned int                    scaled_width;
     unsigned int                    scaled_height;
 };
+
+struct laser_thread_param
+{
+  const char                    * name;      
+    struct fifo_t                 * motor1Fifo;
+    struct fifo_t                 * motor2Fifo;
+    struct fifo_t                 * pwmFifo;    
+    bool                          * quit_flag;  
+    struct pixel_format_RGB       * scaled_RGB_data;
+    unsigned int                    scaled_width;
+    unsigned int                    scaled_height;
+}
 
 
 struct camera_thread_param
@@ -266,7 +293,8 @@ void *Control(void * arg)
                         {
                             mode1 = true;
                             mode2 = false;
-                            stop = true;
+                            mode3 = false;
+                            stop = false;
                             forward = false;
                             backward = false;
                             lineTracing = false;
@@ -276,6 +304,23 @@ void *Control(void * arg)
                       }
                     }
                         break;
+                        case '3':
+                        {
+                            if (modeSwitchFlag)
+                            {
+                              mode1 = false;
+                              mode2 = false;
+                              mode3 = true;
+                              stop = false;
+                              forward = false;
+                              backward = false;
+                              lineTracing = false;
+                              printf("Switched to Mode 2\n");
+                              modeSwitchFlag = false;
+                         
+                          }
+                        }
+                            break;
                      
                     case 'i':     // 'i' increase pwm by 5
                     {
@@ -391,322 +436,494 @@ void *Control(void * arg)
                         break;
                 }
             }
-            else
+            else if(mode3)
             {
-      switch (cmd1.command)
-      {
-        case 'm':
-        {
-        modeSwitchFlag = true;
-      }
-        break;
+              switch (cmd1.command)
+              {
+                  case 'm':
+                  {
+                      modeSwitchFlag = true;
+                    }
+                      break;
 
-       case '2':
-       {
-       if (modeSwitchFlag)
-       {
-         mode1 = false;
-         mode2 = true;
-         printf("Switched to Mode 2\n");
-         modeSwitchFlag = false;
-         }
-       }
-        break;
-       
-        case 'c':
-        {
-            showColor = !showColor;
-        }
-        break;
+                  case '1':
+                  {
+                      if (modeSwitchFlag)
+                      {
+                        mode1 = true;
+                        mode2 = false;
+                        stop = true;
+                        forward = false;
+                        backward = false;
+                        lineTracing = false;
+                        printf("Switched to Mode 1\n");
+                        modeSwitchFlag = false;
+                   
+                    }
+                  }
+                  break;
+                  case '2':
+                  {
+                      if (modeSwitchFlag)
+                      {
+                        mode1 = false;
+                        mode2 = true;
+                        mode3 = false;
+                        printf("Switched to Mode 2\n");
+                        modeSwitchFlag = false;
+                   
+                    }
+                  }
+                      break;
+                   
+                  case 'i':     // 'i' increase pwm by 5
+                  {
+                      cmd2.command = '+'; //+ for +5
+                   
+                    if (!(FIFO_FULL( param->pwmFifo)))
+                    {FIFO_INSERT( param->pwmFifo, cmd2 );}
+                    else {printf( "pwm fifo queue full\n" );}
+                  }
+                  break;
+                 
+                  case 'j':     // 'j' decrease pwm by 5
+                  {
+                     
+                      cmd2.command = '-'; //- for -5
+                     
+                    if (!(FIFO_FULL( param->pwmFifo)))
+                    {FIFO_INSERT( param->pwmFifo, cmd2 );}
+                    else {printf( "pwm fifo queue full\n" );}
+                  }
+                  break;
+                  case 'o':     // 'o' increase angle by 5
+                  {
+                      if(angle != 180)
+                      {
+                        printf("Angle increased!");
+                        angle += 10;
+                        }
+                      else{printf("Max Angle Reached!");}
+                  }
+                  break;
+                 
+                  case 'k':     // 'k' decrease angle by 5
+                  {
+                     if(angle != 5)
+                      {
+                        printf("Angle decreased!");
+                        angle -= 10;
+                        }
+                      else{printf("Min Angle Reached!");}
+                  }
+                  break;
 
-        case 'v':
-        {
-             showGray = !showGray;
-        }
-        break;
+                  case 's':
+                  {
+                      if (!stop)
+                      {
+                          printf("Stopping in Mode 2!\n");
+                          stop = true;
+                          lineTracing = false;
+                          cmd2.command = 's';
+                          cmd2.argument = 0;
+                          FIFO_INSERT(param->motor1Fifo, cmd2);
+                          FIFO_INSERT(param->motor2Fifo, cmd2);
+                      }
+                      else
+                      {
+                          printf("Already stopped in Mode 2.\n");
+                      }
+                    }
+                      break;
 
-        case 'b':
-        {
-              showBlackWhite = !showBlackWhite;
-        }
-        break;
+                  case 'w':
+                  {
+                      if (stop)
+                      {
+                          printf("Starting Line Tracing!\n");
+                          stop = false;
+                          lineTracing = true;
+                      }
+                    }
+                      break;
+                   
+                  case 'c':
+                  {
+                      showColor = !showColor;
+                  }
+                  break;
 
-        case 'n':
-        {
-               showShrinked = !showShrinked;
-        }
-        break;
-       
-        case 's':     // stop engines
-        {
-          if(!stop)
-          {
-            printf("Stop!\n");
-            stop = true;
-            backward = false;
-            left = false;
-            right = false;
-            forward = false;
-            cmd2.command = 's'; //s for stop
-            cmd2.argument = 0;
-          }
-          else {printf( "Already stopped\n" );}
-          if (!(FIFO_FULL( param->motor1Fifo )) && !(FIFO_FULL( param->motor2Fifo )))
-          {FIFO_INSERT( param->motor1Fifo, cmd2 );
-            FIFO_INSERT( param->motor2Fifo, cmd2 );}
-          else {printf( "FIFO FULL\n" );}
-        }
-        break;
+                  case 'v':
+                  {
+                      showGray = !showGray;
+                  }
+                  break;
 
-        case 'w':     // 'w; for forward
-        {
-          if(!forward)
-          {
-            printf("Going forwards!\n");
-            backward = false;
-            left = false;
-            right = false;
-            stop = false;
-            forward = true;
-            cmd2.command = 'w'; //w for forward
-            cmd2.argument = 0;
-          }
-          else {printf( "Already going forward\n" );}
-         
-          if (!(FIFO_FULL( param->motor1Fifo )) && !(FIFO_FULL( param->motor2Fifo )) )
-          {FIFO_INSERT( param->motor1Fifo, cmd2 );
-            FIFO_INSERT( param->motor2Fifo, cmd2 );}
-          else {printf( "FIFO FULL\n" );}
-        }
-        break;
+                  case 'b':
+                  {
+                      showBlackWhite = !showBlackWhite;
+                  }
+                  break;
 
-        case 'x':     // x for backwards
-        {
-          if(!backward)
-          {
-            printf("Going backwards!\n");
-            forward = false;
-            left = false;
-            right = false;
-            stop = false;
-            backward = true;
-            cmd2.command = 'x'; //w for forward
-          }
-          if (!(FIFO_FULL( param->motor1Fifo)) && !(FIFO_FULL( param->motor2Fifo)))
-          {FIFO_INSERT( param->motor1Fifo, cmd2 );
-            FIFO_INSERT( param->motor2Fifo, cmd2 );}
-          else {printf( "Already going backwards\n" );}
-        }
-        break;
-       
-        case 'i':     // 'i' increase pwm by 5
-        {
-            cmd2.command = '+'; //+ for +5
-         
-          if (!(FIFO_FULL( param->pwmFifo)))
-          {FIFO_INSERT( param->pwmFifo, cmd2 );}
-          else {printf( "pwm fifo queue full\n" );}
-        }
-        break;
-       
-        case 'j':     // 'j' decrease pwm by 5
-        {
-           
-            cmd2.command = '-'; //- for -5
-           
-          if (!(FIFO_FULL( param->pwmFifo)))
-          {FIFO_INSERT( param->pwmFifo, cmd2 );}
-          else {printf( "pwm fifo queue full\n" );}
-        }
-        break;
-        case 'o':     // 'o' increase angle by 5
-        {
-            if(angle != 180)
-            {
-              printf("Angle increased!");
-               angle += 10;
-             }
-            else{printf("Max Angle Reached!");}
-        }
-        break;
-       
-        case 'k':     // 'k' decrease angle by 5
-        {
-           
-            if(angle != 5)
-            {
-              printf("Angle decreased!");
-             angle -= 10;
+                  case 'n':
+                  {
+                      showShrinked = !showShrinked;
+                  }
+                  break;
+
+
+                  case 113:
+                  {
+                      cmd2.command = 113;
+                      cmd2.argument = 0;
+                      FIFO_INSERT(param->motor1Fifo, cmd2);
+                      FIFO_INSERT(param->motor2Fifo, cmd2);
+                    }
+                      break;
+
+                  default:
+                  {
+                      modeSwitchFlag = false;
+                      printf("Ignored input: Mode 2 is active.\n");
+                    }
+                      break;
+              }
+
+
             }
-            else{printf("Min Angle Reached!");}
-        }
-        break;
-       
-        case 'a':     // 'a' for left turn
-        {
-            if(stop == false && forward == false && backward == false){stop=true;}
-            left = true;
-            if(stop == true)
-              {
-                if(!(FIFO_FULL( param->motor1Fifo )) && !(FIFO_FULL( param->motor2Fifo )) )
-                {//stopped turn
-                  printf("Turning right!\n");
-                  cmd2.command = 't';
-                  FIFO_INSERT( param->pwmFifo, cmd2 );
-                  cmd2.command = 'x';
-                  FIFO_INSERT( param->motor1Fifo, cmd2 );
-                  cmd2.command = 'w';
-                  FIFO_INSERT( param->motor2Fifo, cmd2 );
-                  wait_period( &timer_state, angle );
-                  cmd2.command = 's';
-                  FIFO_INSERT( param->motor1Fifo, cmd2 );
-                  cmd2.command = 's';
-                  FIFO_INSERT( param->motor2Fifo, cmd2 );
-                }
-                else {printf( "fifo queue full\n" );}
-              }
-              else if(forward == true)
-              {
-                if(!(FIFO_FULL( param->motor1Fifo )) && !(FIFO_FULL( param->motor2Fifo )) )
-                {//forwards turn
-                  printf("Turning right!\n");
-                  cmd2.command = 't';
-                  FIFO_INSERT( param->pwmFifo, cmd2 );
-                  cmd2.command = 's';
-                  FIFO_INSERT( param->motor1Fifo, cmd2 );
-                  cmd2.command = 's';
-                  FIFO_INSERT( param->motor2Fifo, cmd2 );
-                  cmd2.command = 'x';
-                  FIFO_INSERT( param->motor1Fifo, cmd2 );
-                  cmd2.command = 'w';
-                  FIFO_INSERT( param->motor2Fifo, cmd2 );
-                  wait_period( &timer_state, angle );
-                  cmd2.command = 'w';
-                  FIFO_INSERT( param->motor1Fifo, cmd2 );
-                  cmd2.command = 'w';
-                  FIFO_INSERT( param->motor2Fifo, cmd2 );
-                }
-                else {printf( "fifo queue full\n" );}
-              }
-              else if(backward == true)
-              {
-                if(!(FIFO_FULL( param->motor1Fifo )) && !(FIFO_FULL( param->motor2Fifo )) )
-                { //backwards turn
-                  printf("Turning right!\n");
-                  cmd2.command = 't';
-                  FIFO_INSERT( param->pwmFifo, cmd2 );
-                  cmd2.command = 's';
-                  FIFO_INSERT( param->motor1Fifo, cmd2 );
-                  cmd2.command = 's';
-                  FIFO_INSERT( param->motor2Fifo, cmd2 );
-                  cmd2.command = 'x';
-                  FIFO_INSERT( param->motor1Fifo, cmd2 );
-                  cmd2.command = 'w';
-                  FIFO_INSERT( param->motor2Fifo, cmd2 );
-                  wait_period( &timer_state, angle );
-                  cmd2.command = 'x';
-                  FIFO_INSERT( param->motor1Fifo, cmd2 );
-                  cmd2.command = 'x';
-                  FIFO_INSERT( param->motor2Fifo, cmd2 );
-                }
-                else {printf( "fifo queue full\n" );}
-              }
-           
-        }
-        break;
-       
-        case 'd':     // 'd' for right turn
-        {
-            if(stop == false && forward == false && backward == false){stop=true;}
-            right = true;
-            if(stop == true)
-              {
-                if (!(FIFO_FULL( param->motor1Fifo )) && !(FIFO_FULL( param->motor2Fifo )) )
-                { //Stopped turn
-                  printf("Turning left!\n");
-                  cmd2.command = 't';
-                  FIFO_INSERT( param->pwmFifo, cmd2 );
-                  cmd2.command = 'w';
-                  FIFO_INSERT( param->motor1Fifo, cmd2 );
-                  cmd2.command = 'x';
-                  FIFO_INSERT( param->motor2Fifo, cmd2 );
-                  wait_period( &timer_state, angle );
-                  cmd2.command = 's';
-                  FIFO_INSERT( param->motor1Fifo, cmd2 );
-                  cmd2.command = 's';
-                  FIFO_INSERT( param->motor2Fifo, cmd2 );
-                }
-                else {printf( "fifo queue full\n" );}
-              }
-              else if(forward == true)
-              { //Forwards turn
-                if (!(FIFO_FULL( param->motor1Fifo )) && !(FIFO_FULL( param->motor2Fifo )) )
-                {
-                  printf("Turning left!\n");
-                  cmd2.command = 't';
-                  FIFO_INSERT( param->pwmFifo, cmd2 );
-                  cmd2.command = 's';
-                  FIFO_INSERT( param->motor1Fifo, cmd2 );
-                  cmd2.command = 's';
-                  FIFO_INSERT( param->motor2Fifo, cmd2 );
-                  cmd2.command = 'w';
-                  FIFO_INSERT( param->motor1Fifo, cmd2 );
-                  cmd2.command = 'x';
-                  FIFO_INSERT( param->motor2Fifo, cmd2 );
-                  wait_period( &timer_state, angle );
-                  cmd2.command = 'w';
-                  FIFO_INSERT( param->motor1Fifo, cmd2 );
-                  cmd2.command = 'w';
-                  FIFO_INSERT( param->motor2Fifo, cmd2 );
-                }
-                else {printf( "fifo queue full\n" );}
-              } //Backwards turn
-              else if(backward == true)
-              {
-                if (!(FIFO_FULL( param->motor1Fifo )) && !(FIFO_FULL( param->motor2Fifo )) )
-                {
-                  printf("Turning left!\n");
-                  cmd2.command = 't';
-                  FIFO_INSERT( param->pwmFifo, cmd2 );
-                  cmd2.command = 's';
-                  FIFO_INSERT( param->motor1Fifo, cmd2 );
-                  cmd2.command = 's';
-                  FIFO_INSERT( param->motor2Fifo, cmd2 );
-                  cmd2.command = 'w';
-                  FIFO_INSERT( param->motor1Fifo, cmd2 );
-                  cmd2.command = 'x';
-                  FIFO_INSERT( param->motor2Fifo, cmd2 );
-                  wait_period( &timer_state, angle );
-                  cmd2.command = 'x';
-                  FIFO_INSERT( param->motor1Fifo, cmd2 );
-                  cmd2.command = 'x';
-                  FIFO_INSERT( param->motor2Fifo, cmd2 );
-                }
-                else {printf( "fifo queue full\n" );}
-              }
-        }
-        break;
+            else{
+                  switch (cmd1.command)
+                  {
+                    case 'm':
+                    {
+                    modeSwitchFlag = true;
+                  }
+                    break;
 
-        case 113:  // 'q' for quit both red and green LED threads
-        {
-          cmd2.command = 113;
-          cmd2.argument = 0;
-           if (!(FIFO_FULL( param->motor1Fifo )) && !(FIFO_FULL( param->motor2Fifo )) )
-          {FIFO_INSERT( param->motor1Fifo, cmd2 );
-            FIFO_INSERT( param->motor2Fifo, cmd2 );}
-          else {printf( "FIFO FULL\n" );}
-        }
-        break;
+                  case '2':
+                  {
+                  if (modeSwitchFlag)
+                  {
+                    mode1 = false;
+                    mode2 = true;
+                    mode3 = false;
+                    printf("Switched to Mode 2\n");
+                    modeSwitchFlag = false;
+                    }
+                  }
+                    break;
+                    case '3':
+                    {
+                    if (modeSwitchFlag)
+                    {
+                      mode1 = false;
+                      mode2 = false;
+                      mode3 = true;
+                      forward = false;
+                      backwards = false;
+                      stop = false;
+                      lineTracing = false
+                      printf("Switched to Mode 3\n");
+                      modeSwitchFlag = false;
+                      }
+                    }
+                      break;
+                  
+                    case 'c':
+                    {
+                        showColor = !showColor;
+                    }
+                    break;
 
-        default:
-        {
-          modeSwitchFlag = false;
-          printf("Ignored input: Mode 2 is active.\n");
+                    case 'v':
+                    {
+                        showGray = !showGray;
+                    }
+                    break;
 
-        }
-        break;
+                    case 'b':
+                    {
+                          showBlackWhite = !showBlackWhite;
+                    }
+                    break;
 
-      }
+                    case 'n':
+                    {
+                          showShrinked = !showShrinked;
+                    }
+                    break;
+                  
+                    case 's':     // stop engines
+                    {
+                      if(!stop)
+                      {
+                        printf("Stop!\n");
+                        stop = true;
+                        backward = false;
+                        left = false;
+                        right = false;
+                        forward = false;
+                        cmd2.command = 's'; //s for stop
+                        cmd2.argument = 0;
+                      }
+                      else {printf( "Already stopped\n" );}
+                      if (!(FIFO_FULL( param->motor1Fifo )) && !(FIFO_FULL( param->motor2Fifo )))
+                      {FIFO_INSERT( param->motor1Fifo, cmd2 );
+                        FIFO_INSERT( param->motor2Fifo, cmd2 );}
+                      else {printf( "FIFO FULL\n" );}
+                    }
+                    break;
+
+                    case 'w':     // 'w; for forward
+                    {
+                      if(!forward)
+                      {
+                        printf("Going forwards!\n");
+                        backward = false;
+                        left = false;
+                        right = false;
+                        stop = false;
+                        forward = true;
+                        cmd2.command = 'w'; //w for forward
+                        cmd2.argument = 0;
+                      }
+                      else {printf( "Already going forward\n" );}
+                    
+                      if (!(FIFO_FULL( param->motor1Fifo )) && !(FIFO_FULL( param->motor2Fifo )) )
+                      {FIFO_INSERT( param->motor1Fifo, cmd2 );
+                        FIFO_INSERT( param->motor2Fifo, cmd2 );}
+                      else {printf( "FIFO FULL\n" );}
+                    }
+                    break;
+
+                    case 'x':     // x for backwards
+                    {
+                      if(!backward)
+                      {
+                        printf("Going backwards!\n");
+                        forward = false;
+                        left = false;
+                        right = false;
+                        stop = false;
+                        backward = true;
+                        cmd2.command = 'x'; //w for forward
+                      }
+                      if (!(FIFO_FULL( param->motor1Fifo)) && !(FIFO_FULL( param->motor2Fifo)))
+                      {FIFO_INSERT( param->motor1Fifo, cmd2 );
+                        FIFO_INSERT( param->motor2Fifo, cmd2 );}
+                      else {printf( "Already going backwards\n" );}
+                    }
+                    break;
+                  
+                    case 'i':     // 'i' increase pwm by 5
+                    {
+                        cmd2.command = '+'; //+ for +5
+                    
+                      if (!(FIFO_FULL( param->pwmFifo)))
+                      {FIFO_INSERT( param->pwmFifo, cmd2 );}
+                      else {printf( "pwm fifo queue full\n" );}
+                    }
+                    break;
+                  
+                    case 'j':     // 'j' decrease pwm by 5
+                    {
+                      
+                        cmd2.command = '-'; //- for -5
+                      
+                      if (!(FIFO_FULL( param->pwmFifo)))
+                      {FIFO_INSERT( param->pwmFifo, cmd2 );}
+                      else {printf( "pwm fifo queue full\n" );}
+                    }
+                    break;
+                    case 'o':     // 'o' increase angle by 5
+                    {
+                        if(angle != 180)
+                        {
+                          printf("Angle increased!");
+                          angle += 10;
+                        }
+                        else{printf("Max Angle Reached!");}
+                    }
+                    break;
+                  
+                    case 'k':     // 'k' decrease angle by 5
+                    {
+                      
+                        if(angle != 5)
+                        {
+                          printf("Angle decreased!");
+                        angle -= 10;
+                        }
+                        else{printf("Min Angle Reached!");}
+                    }
+                    break;
+                  
+                    case 'a':     // 'a' for left turn
+                    {
+                        if(stop == false && forward == false && backward == false){stop=true;}
+                        left = true;
+                        if(stop == true)
+                          {
+                            if(!(FIFO_FULL( param->motor1Fifo )) && !(FIFO_FULL( param->motor2Fifo )) )
+                            {//stopped turn
+                              printf("Turning right!\n");
+                              cmd2.command = 't';
+                              FIFO_INSERT( param->pwmFifo, cmd2 );
+                              cmd2.command = 'x';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 'w';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                              wait_period( &timer_state, angle );
+                              cmd2.command = 's';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 's';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                            }
+                            else {printf( "fifo queue full\n" );}
+                          }
+                          else if(forward == true)
+                          {
+                            if(!(FIFO_FULL( param->motor1Fifo )) && !(FIFO_FULL( param->motor2Fifo )) )
+                            {//forwards turn
+                              printf("Turning right!\n");
+                              cmd2.command = 't';
+                              FIFO_INSERT( param->pwmFifo, cmd2 );
+                              cmd2.command = 's';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 's';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                              cmd2.command = 'x';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 'w';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                              wait_period( &timer_state, angle );
+                              cmd2.command = 'w';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 'w';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                            }
+                            else {printf( "fifo queue full\n" );}
+                          }
+                          else if(backward == true)
+                          {
+                            if(!(FIFO_FULL( param->motor1Fifo )) && !(FIFO_FULL( param->motor2Fifo )) )
+                            { //backwards turn
+                              printf("Turning right!\n");
+                              cmd2.command = 't';
+                              FIFO_INSERT( param->pwmFifo, cmd2 );
+                              cmd2.command = 's';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 's';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                              cmd2.command = 'x';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 'w';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                              wait_period( &timer_state, angle );
+                              cmd2.command = 'x';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 'x';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                            }
+                            else {printf( "fifo queue full\n" );}
+                          }
+                      
+                    }
+                    break;
+                  
+                    case 'd':     // 'd' for right turn
+                    {
+                        if(stop == false && forward == false && backward == false){stop=true;}
+                        right = true;
+                        if(stop == true)
+                          {
+                            if (!(FIFO_FULL( param->motor1Fifo )) && !(FIFO_FULL( param->motor2Fifo )) )
+                            { //Stopped turn
+                              printf("Turning left!\n");
+                              cmd2.command = 't';
+                              FIFO_INSERT( param->pwmFifo, cmd2 );
+                              cmd2.command = 'w';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 'x';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                              wait_period( &timer_state, angle );
+                              cmd2.command = 's';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 's';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                            }
+                            else {printf( "fifo queue full\n" );}
+                          }
+                          else if(forward == true)
+                          { //Forwards turn
+                            if (!(FIFO_FULL( param->motor1Fifo )) && !(FIFO_FULL( param->motor2Fifo )) )
+                            {
+                              printf("Turning left!\n");
+                              cmd2.command = 't';
+                              FIFO_INSERT( param->pwmFifo, cmd2 );
+                              cmd2.command = 's';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 's';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                              cmd2.command = 'w';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 'x';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                              wait_period( &timer_state, angle );
+                              cmd2.command = 'w';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 'w';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                            }
+                            else {printf( "fifo queue full\n" );}
+                          } //Backwards turn
+                          else if(backward == true)
+                          {
+                            if (!(FIFO_FULL( param->motor1Fifo )) && !(FIFO_FULL( param->motor2Fifo )) )
+                            {
+                              printf("Turning left!\n");
+                              cmd2.command = 't';
+                              FIFO_INSERT( param->pwmFifo, cmd2 );
+                              cmd2.command = 's';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 's';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                              cmd2.command = 'w';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 'x';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                              wait_period( &timer_state, angle );
+                              cmd2.command = 'x';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 'x';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                            }
+                            else {printf( "fifo queue full\n" );}
+                          }
+                    }
+                    break;
+
+                    case 113:  // 'q' for quit both red and green LED threads
+                    {
+                      cmd2.command = 113;
+                      cmd2.argument = 0;
+                      if (!(FIFO_FULL( param->motor1Fifo )) && !(FIFO_FULL( param->motor2Fifo )) )
+                      {FIFO_INSERT( param->motor1Fifo, cmd2 );
+                        FIFO_INSERT( param->motor2Fifo, cmd2 );}
+                      else {printf( "FIFO FULL\n" );}
+                    }
+                    break;
+
+                    default:
+                    {
+                      modeSwitchFlag = false;
+                      printf("Ignored input: Mode 2 is active.\n");
+
+                    }
+                    break;
+
+                  }
     }
     }
 
@@ -722,6 +939,172 @@ void *Control(void * arg)
 
 }
 
+void *LaserThread(void *arg)
+{
+  struct line_trace_thread_param *param = (struct line_trace_thread_param *)arg;
+  struct thread_command cmd = {0, 0};
+  struct timespec timer_state;
+  wait_period_initialize(&timer_state);
+
+  // Boundaries for the 3×3 grid:
+  // Rows:
+  int topEnd = 10;  // y<10 => top, 10<=y<14 => mid, y>=14 => bottom
+  int midEnd = 14;
+  // Columns:
+  int leftEnd   = 14;  // x<14 => left
+  int centerEnd = 18;  // 14<=x<18 => center, x>=18 => right
+
+  speed = 30;
+
+  while (!*(param->quit_flag))
+  {
+      if (mode3 && !stop)
+      {
+          //Default no laser
+          LaserBox foundBox = BOX_NONE;
+          bool foundLaser = false;
+
+          //Scan for laser untill found
+          pthread_mutex_lock(&g_shrunk_data_lock);
+          for (int y = 0; y < SHRUNK_H && !foundLaser; y++)
+          {
+              for (int x = 0; x < SHRUNK_W && !foundLaser; x++)
+              {
+                //Find laser
+                  if (g_shrunk_data[y * SHRUNK_W + x].R == 255)
+                  {
+                      //top row
+                      if (y < topEnd) {
+                          if (x < leftEnd)
+                          { foundBox = BOX_TOP_LEFT;}
+                          else if (x < centerEnd)
+                          {foundBox = BOX_TOP_CENTER;}
+                          else
+                          {foundBox = BOX_TOP_RIGHT;}
+                      }
+                      else if (y < midEnd) {
+                          // middle row
+                          if (x < leftEnd)
+                          {foundBox = BOX_MID_LEFT;}
+                          else if (x < centerEnd)
+                          {foundBox = BOX_MID_CENTER;}
+                          else
+                          {foundBox = BOX_MID_RIGHT;}
+                      }
+                      else {
+                          //Bottom row
+                          if (x < leftEnd)
+                          {foundBox = BOX_BOTTOM_LEFT;}
+                          else if (x < centerEnd)      
+                          {foundBox = BOX_BOTTOM_CENTER;}
+                          else                         
+                          {foundBox = BOX_BOTTOM_RIGHT;}
+                      }
+                      foundLaser = true;
+                  }
+              }
+          }
+          pthread_mutex_unlock(&g_shrunk_data_lock);
+
+          //Depending on box pick command
+          switch (foundBox)
+          {
+              case BOX_NONE:
+                  //No laser do nothing
+                  printf("No laser\n");
+                  cmd.command = 's';
+                  FIFO_INSERT(param->motor1Fifo, cmd);
+                  FIFO_INSERT(param->motor2Fifo, cmd);
+                  break;
+
+              //In left boxes turn left
+              case BOX_TOP_LEFT:
+              case BOX_MID_LEFT:
+              case BOX_BOTTOM_LEFT:
+                  printf("Laser in Left\n");
+                  if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
+                      cmd.command = 's';
+                      FIFO_INSERT(param->motor1Fifo, cmd);
+                      FIFO_INSERT(param->motor2Fifo, cmd);
+                      wait_period(&timer_state, 60u);
+
+                      cmd.command = 'l';
+                      FIFO_INSERT(param->pwmFifo, cmd);
+                      cmd.command = 'w';
+                      FIFO_INSERT(param->motor1Fifo, cmd);
+                      cmd.command = 'x';
+                      FIFO_INSERT(param->motor2Fifo, cmd);
+                      wait_period(&timer_state, 100u);
+
+                      cmd.command = 'w';
+                      FIFO_INSERT(param->motor1Fifo, cmd);
+                      FIFO_INSERT(param->motor2Fifo, cmd);
+                  }
+                  break;
+
+              //In right boxes turn right
+              case BOX_TOP_RIGHT:
+              case BOX_MID_RIGHT:
+              case BOX_BOTTOM_RIGHT:
+                  printf("Laser in Right\n");
+                  if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
+                      cmd.command = 's';
+                      FIFO_INSERT(param->motor1Fifo, cmd);
+                      FIFO_INSERT(param->motor2Fifo, cmd);
+                      wait_period(&timer_state, 60u);
+
+                      cmd.command = 'l';
+                      FIFO_INSERT(param->pwmFifo, cmd);
+                      cmd.command = 'w';
+                      FIFO_INSERT(param->motor1Fifo, cmd);
+                      cmd.command = 'x';
+                      FIFO_INSERT(param->motor2Fifo, cmd);
+                      wait_period(&timer_state, 100u);
+
+                      cmd.command = 'w';
+                      FIFO_INSERT(param->motor1Fifo, cmd);
+                      FIFO_INSERT(param->motor2Fifo, cmd);
+                  }
+                  break;
+
+              //In top center go forward
+              case BOX_TOP_CENTER:
+                  printf("Laser in Top Center\n");
+                  if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
+                      cmd.command = 'w';
+                      FIFO_INSERT(param->motor1Fifo, cmd);
+                      FIFO_INSERT(param->motor2Fifo, cmd);
+                  }
+                  break;
+
+              //Laser centered do not move.
+              case BOX_MID_CENTER:
+                  printf("Laser in Middleg\n");
+                  if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
+                    cmd.command = 's';
+                    FIFO_INSERT(param->motor1Fifo, cmd);
+                    FIFO_INSERT(param->motor2Fifo, cmd);
+                }
+                  break;
+              
+                  //Laser close to car move backwards
+              case BOX_BOTTOM_CENTER:
+                  printf("Laser in Bottom Center\n");
+                  if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
+                      cmd.command = 'x';
+                      FIFO_INSERT(param->motor1Fifo, cmd);
+                      FIFO_INSERT(param->motor2Fifo, cmd);
+                  }
+                  break;
+          }
+      }
+
+      wait_period(&timer_state, 10u);
+  }
+
+  printf("LaserThread done\n");
+  return NULL;
+}
 
 void *LineTraceThread(void *arg)
 {
@@ -731,16 +1114,14 @@ void *LineTraceThread(void *arg)
     wait_period_initialize(&timer_state);
     speed = 30;
     
-    // Use rows from 18 to the bottom of the 32x24 image.
-    int startRow = 22;
+    //Scan bottom rows
+    int startRow = 20;
     int endRow = SHRUNK_H - 1; 
     
-    // Define region parameters.
-    int halfRegion = SHRUNK_W / 4;  // Half the distance from center to edge.
+    int halfRegion = SHRUNK_W / 4;
     int centerCol = SHRUNK_W / 2;
     
-    // Center threshold: if the difference between left and right counts is
-    // less than or equal to this value, the robot will go forward.
+    //Threshold for center
     int centerThreshold = 3;
     
     while (!*(param->quit_flag))
@@ -750,16 +1131,13 @@ void *LineTraceThread(void *arg)
             int leftCount = 0;
             int rightCount = 0;
             
-            // Lock and read the global shrunk image (g_shrunk_data2).
             pthread_mutex_lock(&g_shrunk_data_lock2);
             for (int row = startRow; row < endRow; row++)
             {
-                // Left region: from centerCol - halfRegion to centerCol.
                 for (int x = centerCol - halfRegion; x < centerCol; x++) {
                     if (g_shrunk_data2[row * SHRUNK_W + x].R == 0)
                         leftCount++;
                 }
-                // Right region: from centerCol to centerCol + halfRegion.
                 for (int x = centerCol; x < centerCol + halfRegion; x++) {
                     if (g_shrunk_data2[row * SHRUNK_W + x].R == 0)
                         rightCount++;
@@ -767,10 +1145,8 @@ void *LineTraceThread(void *arg)
             }
             pthread_mutex_unlock(&g_shrunk_data_lock2);
 
-                //Turn left
-            // Decision making based on which side has more black pixels.
+                //Go forward if in threshold
             if (abs(leftCount - rightCount) <= centerThreshold) {
-                // The counts are nearly equal: go forward.
                 if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
                     cmd2.command = 'w';
                     FIFO_INSERT(param->motor1Fifo, cmd2);
@@ -778,7 +1154,7 @@ void *LineTraceThread(void *arg)
                 }
             }
             else if (leftCount > rightCount) {
-                // Turn left.
+                //Turn left
                 if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
                     cmd2.command = 's';
                     FIFO_INSERT(param->motor1Fifo, cmd2);
@@ -798,8 +1174,8 @@ void *LineTraceThread(void *arg)
                     FIFO_INSERT(param->motor2Fifo, cmd2);
                 }
             }
-            else { // rightCount > leftCount.
-                // Turn right.
+            else { //(Right count higher)
+                //Turn right
                 if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
                     cmd2.command = 's';
                     FIFO_INSERT(param->motor1Fifo, cmd2);
@@ -1241,7 +1617,38 @@ void *DisplayThread(void *arg)
     while (!*(param->quit_flag))
     {
       
-        
+        if(showColor == false)
+        {
+
+        }
+        else
+        {
+
+        }
+        if(showGray == false)
+        {
+
+        }
+        else
+        {
+          
+        }
+        if(showBlackWhite == false)
+        {
+
+        }
+        else
+        {
+          
+        }
+        if(showShrinked == false)
+        {
+
+        }
+        else
+        {
+          
+        }
         
         memcpy(colorBuffer,  param->scaled_RGB_data, numPixels * sizeof(struct pixel_format_RGB));
         memcpy(grayBuffer,   param->scaled_RGB_data, numPixels * sizeof(struct pixel_format_RGB));
@@ -1380,6 +1787,7 @@ int main( int argc, char * argv[] )
   pthread_t tk;
   pthread_t tc;
   pthread_t tLineTrace;
+  pthread_t tLaser;
   pthread_t tDisplay;
   struct fifo_t key_fifo   = {{}, 0, 0, PTHREAD_MUTEX_INITIALIZER};
   struct fifo_t motor1Fifo    = {{}, 0, 0, PTHREAD_MUTEX_INITIALIZER};
@@ -1405,6 +1813,7 @@ int main( int argc, char * argv[] )
   struct control_thread_param   con_param   = {"con", &key_fifo, &motor1Fifo, &motor2Fifo, &pwmFifo, &quit_flag};
   struct line_trace_thread_param lineTraceParam = {"linetrace", &motor1Fifo, &motor2Fifo, &pwmFifo, &quit_flag, NULL, scaled_RGB_data, scaled_height, scaled_width};
   struct camera_thread_param cameraParam = {handle, scaled_data, scaled_RGB_data, scaled_height, scaled_width, &quit_flag, argc, argv, handle_GUI_color};
+  struct laser_thread_param laserParam = {"laser", &motor1Fifo, &motor2Fifo, &pwmFifo, &quit_flag, NULL, scaled_RGB_data, scaled_height, scaled_width}
   
   if (io != NULL)
   {
@@ -1430,6 +1839,7 @@ int main( int argc, char * argv[] )
     pthread_create(&tc, NULL, Control,   (void *)&con_param);
     pthread_create(&tLineTrace, NULL, LineTraceThread, (void *)&lineTraceParam);
     pthread_create(&tDisplay, NULL, DisplayThread, (void *)&cameraParam);
+    pthread_create(&tLaser, NULL, LaserThread, (void *)&laserParam);
     // Join threads
     pthread_join(tMotor1, NULL);
     pthread_join(tMotor2, NULL);
@@ -1438,13 +1848,14 @@ int main( int argc, char * argv[] )
     pthread_join(tc, NULL);
     pthread_join(tLineTrace, NULL);
     pthread_join(tDisplay, NULL);
+    pthread_join(tLaser, NULL);
    
     free(scaled_data);
     video_interface_close(handle);
-    draw_bitmap_close_window(handle_GUI_color);
-    draw_bitmap_close_window(handle_GUI_gray);
-    draw_bitmap_close_window(handle_GUI_black_white);
-    draw_bitmap_close_window(handle_GUI_shrinked);
+    //draw_bitmap_close_window(handle_GUI_color);
+    //draw_bitmap_close_window(handle_GUI_gray);
+    //draw_bitmap_close_window(handle_GUI_black_white);
+    //draw_bitmap_close_window(handle_GUI_shrinked);
     draw_bitmap_stop();
 
     /* main task finished  */
