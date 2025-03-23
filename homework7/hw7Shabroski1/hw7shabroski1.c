@@ -958,6 +958,7 @@ void *LaserThread(void *arg)
 
   while (!*(param->quit_flag))
   {
+    if(mode3){
       if (mode3 && !stop)
       {
           //Default no laser
@@ -1096,9 +1097,9 @@ void *LaserThread(void *arg)
         cmd.command = 's';
         FIFO_INSERT(param->motor1Fifo, cmd);
         FIFO_INSERT(param->motor2Fifo, cmd);}
-
+      }
       wait_period(&timer_state, 10u);
-        
+       
       }
     
   printf("LaserThread done\n");
@@ -1106,101 +1107,107 @@ void *LaserThread(void *arg)
 
 }
 
-void *LineTraceThread(void *arg)
+void *LineTraceThread(void * arg)
 {
-    struct line_trace_thread_param *param = (struct line_trace_thread_param *)arg;
+    struct line_trace_thread_param * param = (struct line_trace_thread_param *)arg;
     struct thread_command cmd2 = {0, 0};
     struct timespec timer_state;
-    wait_period_initialize(&timer_state);
     
-    //Scan bottom rows
-    int startRow = 20;
-    int endRow = SHRUNK_H - 1; 
-    
-    int halfRegion = SHRUNK_W / 4;
-    int centerCol = SHRUNK_W / 2;
-    
-    //Threshold for center
-    int centerThreshold = 3;
-    
+    // For a 32-pixel wide image, threshold was 8.
+    // Now that SHRUNK_W is 64, we double the threshold.
+    int threshold = 8;  
+
+    // Calculate the vertical band to examine based on the image height.
+    // For SHRUNK_H == 48, this will examine rows 22 to 26.
+    int middleStart = 42;  
+    int middleEnd   = 46;  
+
     while (!*(param->quit_flag))
     {
         if (mode2 && !stop)
         {
-            int leftCount = 0;
-            int rightCount = 0;
-            
-            pthread_mutex_lock(&g_shrunk_data_lock2);
-            for (int row = startRow; row < endRow; row++)
-            {
-                for (int x = centerCol - halfRegion; x < centerCol; x++) {
-                    if (g_shrunk_data2[row * SHRUNK_W + x].R == 0)
-                        leftCount++;
-                }
-                for (int x = centerCol; x < centerCol + halfRegion; x++) {
-                    if (g_shrunk_data2[row * SHRUNK_W + x].R == 0)
-                        rightCount++;
-                }
-            }
-            pthread_mutex_unlock(&g_shrunk_data_lock2);
+                speed = 30;
+            int blackCount = 0;
+            int sumX       = 0;
 
-                //Go forward if in threshold
-            if (abs(leftCount - rightCount) <= centerThreshold && !forward) {
-                if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
-                    forward = true;
-                    cmd2.command = 'w';
-                    FIFO_INSERT(param->motor1Fifo, cmd2);
-                    FIFO_INSERT(param->motor2Fifo, cmd2);
+            pthread_mutex_lock(&g_shrunk_data_lock);
+            for (int row = middleStart; row <= middleEnd; row++)
+            {
+                for (int x = 0; x < SHRUNK_W; x++)
+                {
+                    uint8_t pixelVal = g_shrunk_data[row * SHRUNK_W + x].R;
+                    if (pixelVal == 0)
+                    {
+                        blackCount++;
+                        sumX += x;
+                    }
                 }
             }
-            else if (leftCount > rightCount) {
-                //Turn left
-                if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
-                    forward = false;
+            pthread_mutex_unlock(&g_shrunk_data_lock);
+
+            // Process the line if any black pixels were detected.
+            if (blackCount > 0)
+            {
+                int centerX = sumX / blackCount;
+                int centerOfImage = SHRUNK_W / 2;
+
+                // Turn left if the detected center is to the left of the center minus threshold.
+                if (centerX < (centerOfImage - threshold)) {
+                    printf("Turning Left!\n");
                     cmd2.command = 's';
                     FIFO_INSERT(param->motor1Fifo, cmd2);
                     FIFO_INSERT(param->motor2Fifo, cmd2);
                     wait_period(&timer_state, 60u);
-                    
                     cmd2.command = 'l';
                     FIFO_INSERT(param->pwmFifo, cmd2);
                     cmd2.command = 'x';
                     FIFO_INSERT(param->motor1Fifo, cmd2);
                     cmd2.command = 'w';
                     FIFO_INSERT(param->motor2Fifo, cmd2);
-                    wait_period(&timer_state, 150u);
-                    
+                    wait_period(&timer_state, 250u);
                     cmd2.command = 'w';
                     FIFO_INSERT(param->motor1Fifo, cmd2);
                     FIFO_INSERT(param->motor2Fifo, cmd2);
                 }
-            }
-            else { //(Right count higher)
-                //Turn right
-                if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
-                    forward = false;
+                // Turn right if the detected center is to the right of the center plus threshold.
+                else if (centerX > (centerOfImage + threshold)) {
+                    printf("Correcting: Turning Right!\n");
                     cmd2.command = 's';
                     FIFO_INSERT(param->motor1Fifo, cmd2);
                     FIFO_INSERT(param->motor2Fifo, cmd2);
                     wait_period(&timer_state, 60u);
-                    
-                    cmd2.command = 'l';
+                    cmd2.command = 't';
                     FIFO_INSERT(param->pwmFifo, cmd2);
                     cmd2.command = 'w';
                     FIFO_INSERT(param->motor1Fifo, cmd2);
                     cmd2.command = 'x';
                     FIFO_INSERT(param->motor2Fifo, cmd2);
-                    wait_period(&timer_state, 150u);
-                    
+                    wait_period(&timer_state, 250u);
                     cmd2.command = 'w';
                     FIFO_INSERT(param->motor1Fifo, cmd2);
                     FIFO_INSERT(param->motor2Fifo, cmd2);
                 }
+                // Otherwise, continue going straight.
+                else{
+                    cmd2.command = 'w';
+                    FIFO_INSERT(param->motor1Fifo, cmd2);
+                    FIFO_INSERT(param->motor2Fifo, cmd2);
+                    wait_period(&timer_state, 250u);
+                }
+            }
+            else
+            {
+                // If no line is detected, send a stop command.
+                cmd2.command = 's';
+                cmd2.argument = 0;
+                FIFO_INSERT(param->motor1Fifo, cmd2);
+                FIFO_INSERT(param->motor2Fifo, cmd2);
             }
         }
-        wait_period(&timer_state, 10u);
+        // Sync with frame rate
+        wait_period(&timer_state, 50u);
     }
-    
+
     printf("LineTrace function done\n");
     return NULL;
 }
@@ -1783,7 +1790,7 @@ void *DisplayThread(void *arg)
                     
                     struct pixel_format_RGB spixel = shrinkBuffer2[y2 * param->scaled_width + x2];
                     uint8_t gray = (spixel.R + spixel.G + spixel.B) / 3;
-                    uint8_t bw   = (gray > 30) ? 255 : 0;
+                    uint8_t bw   = (gray > 25) ? 255 : 0;
                     shrinkedData2[y * targetWidth + x].R = bw;
                     shrinkedData2[y * targetWidth + x].G = bw;
                     shrinkedData2[y * targetWidth + x].B = bw;
