@@ -76,6 +76,8 @@ volatile bool showShrinked = false;
 
 static struct pixel_format_RGB g_shrunk_data[SHRUNK_W* SHRUNK_H];
 static pthread_mutex_t g_shrunk_data_lock = PTHREAD_MUTEX_INITIALIZER;
+static struct pixel_format_RGB g_shrunk_data2[SHRUNK_W * SHRUNK_H];
+static pthread_mutex_t g_shrunk_data_lock2 = PTHREAD_MUTEX_INITIALIZER;
 struct pixel_format_RGB *master_buffer;
 
 
@@ -299,6 +301,7 @@ void *Control(void * arg)
                     {
                         if(angle != 180)
                         {
+                          printf("Angle increased!");
                           angle += 10;
                           }
                         else{printf("Max Angle Reached!");}
@@ -309,6 +312,7 @@ void *Control(void * arg)
                     {
                        if(angle != 5)
                         {
+                          printf("Angle decreased!");
                           angle -= 10;
                           }
                         else{printf("Min Angle Reached!");}
@@ -519,6 +523,7 @@ void *Control(void * arg)
         {
             if(angle != 180)
             {
+              printf("Angle increased!");
                angle += 10;
              }
             else{printf("Max Angle Reached!");}
@@ -530,6 +535,7 @@ void *Control(void * arg)
            
             if(angle != 5)
             {
+              printf("Angle decreased!");
              angle -= 10;
             }
             else{printf("Min Angle Reached!");}
@@ -717,103 +723,109 @@ void *Control(void * arg)
 }
 
 
-void *LineTraceThread(void * arg)
+void *LineTraceThread(void *arg)
 {
- struct line_trace_thread_param * param = (struct line_trace_thread_param *)arg;
+    struct line_trace_thread_param *param = (struct line_trace_thread_param *)arg;
     struct thread_command cmd2 = {0, 0};
     struct timespec timer_state;
     wait_period_initialize(&timer_state);
-
-    int row1 = global_scaled_height / 2;
-    int row2 = (3 * global_scaled_height) / 4; 
-    int row3 = (9 * global_scaled_height) / 10;   
-
-    int leftX = 5;                            
-    int rightX = global_scaled_width - 5; 
-
+    speed = 30;
+    
+    int startRow = 22;
+    int endRow = SHRUNK_H;
+    int halfRegion = SHRUNK_W / 4;
+    int centerCol = SHRUNK_W / 2;
+    
     while (!*(param->quit_flag))
     {
-        speed = 30;
-        int leftBlackCount = 0;
-        int rightBlackCount = 0;
-        int sampleRows[3] = { row1, row2, row3 };
-
-        pthread_mutex_lock(&g_scaled_bw_data_lock);
-        for (int i = 0; i < 3; i++) {
-            int y = sampleRows[i];
-            int leftIdx  = y * global_scaled_width + leftX;
-            int rightIdx = y * global_scaled_width + rightX;
-            if (g_scaled_bw_data[leftIdx].R == 0) {
-                leftBlackCount++;
+        if (mode2 && !stop)
+        {
+            int leftCount = 0;
+            int rightCount = 0;
+            
+            // Lock and read the global shrunk image (g_shrunk_data2)
+            pthread_mutex_lock(&g_shrunk_data_lock2);
+            for (int row = startRow; row < endRow; row++)
+            {
+                // Left region: from centerCol - halfRegion to centerCol
+                for (int x = centerCol - halfRegion; x < centerCol; x++) {
+                    if (g_shrunk_data2[row * SHRUNK_W + x].R == 0)
+                        leftCount++;
+                }
+                // Right region: from centerCol to centerCol + halfRegion
+                for (int x = centerCol; x < centerCol + halfRegion; x++) {
+                    if (g_shrunk_data2[row * SHRUNK_W + x].R == 0)
+                        rightCount++;
+                }
             }
-            if (g_scaled_bw_data[rightIdx].R == 0) {
-                rightBlackCount++;
+            pthread_mutex_unlock(&g_shrunk_data_lock2);
+        
+
+                //Turn left
+            // Decision making based on which side has more black pixels.
+            if (leftCount > rightCount && leftCount > 0)
+            {
+                // Turn left
+                if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo)))
+                {
+                    cmd2.command = 's';
+                    FIFO_INSERT(param->motor1Fifo, cmd2);
+                    FIFO_INSERT(param->motor2Fifo, cmd2);
+                    wait_period(&timer_state, 60u);
+                    
+                    cmd2.command = 'l';
+                    FIFO_INSERT(param->pwmFifo, cmd2);
+                    cmd2.command = 'x';
+                    FIFO_INSERT(param->motor1Fifo, cmd2);
+                    cmd2.command = 'w';
+                    FIFO_INSERT(param->motor2Fifo, cmd2);
+                    wait_period(&timer_state, 100u);
+                    cmd2.command = 'w';
+                    FIFO_INSERT(param->motor1Fifo, cmd2);
+                    FIFO_INSERT(param->motor2Fifo, cmd2);
+                }
+            }
+            else if (rightCount > leftCount && rightCount > 0)
+            {
+                // Turn right
+                if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo)))
+                {
+                    cmd2.command = 's';
+                    FIFO_INSERT(param->motor1Fifo, cmd2);
+                    FIFO_INSERT(param->motor2Fifo, cmd2);
+                    wait_period(&timer_state, 60u);
+                    
+                    cmd2.command = 'l';
+                    FIFO_INSERT(param->pwmFifo, cmd2);
+                    cmd2.command = 'w';
+                    FIFO_INSERT(param->motor1Fifo, cmd2);
+                    cmd2.command = 'x';
+                    FIFO_INSERT(param->motor2Fifo, cmd2);
+                    wait_period(&timer_state, 100u);
+                    cmd2.command = 'w';
+                    FIFO_INSERT(param->motor1Fifo, cmd2);
+                    FIFO_INSERT(param->motor2Fifo, cmd2);
+                }
+            }
+            else
+            {
+                // If no significant black is found, simply go forward.
+                if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo)))
+                {
+                    cmd2.command = 'w';
+                    FIFO_INSERT(param->motor1Fifo, cmd2);
+                    FIFO_INSERT(param->motor2Fifo, cmd2);
+                }
             }
         }
-        pthread_mutex_unlock(&g_scaled_bw_data_lock);
-        
-        int diff = leftBlackCount - rightBlackCount;
-        int threshold = 50;
-        
-
-        if (diff > threshold) {
-            printf("Turning Left!\n");
-            cmd2.command = 's';
-            FIFO_INSERT(param->motor1Fifo, cmd2);
-            FIFO_INSERT(param->motor2Fifo, cmd2);
-            wait_period(&timer_state, 60u);
-                    
-            cmd2.command = 'l';
-            FIFO_INSERT(param->pwmFifo, cmd2);
-            cmd2.command = 'w';
-            FIFO_INSERT(param->motor1Fifo, cmd2);
-            cmd2.command = 'x';
-            FIFO_INSERT(param->motor2Fifo, cmd2);
-            wait_period(&timer_state, 100u);
-            cmd2.command = 'w';
-            FIFO_INSERT(param->motor1Fifo, cmd2);
-            FIFO_INSERT(param->motor2Fifo, cmd2);
-        }
-        else if (-diff > threshold) {
-            printf("Turning Right!\n");
-            cmd2.command = 's';
-            FIFO_INSERT(param->motor1Fifo, cmd2);
-            FIFO_INSERT(param->motor2Fifo, cmd2);
-            wait_period(&timer_state, 60u);
-                    
-            cmd2.command = 'l';
-            FIFO_INSERT(param->pwmFifo, cmd2);
-            cmd2.command = 'w';
-            FIFO_INSERT(param->motor1Fifo, cmd2);
-            cmd2.command = 'x';
-            FIFO_INSERT(param->motor2Fifo, cmd2);
-            wait_period(&timer_state, 100u);
-            cmd2.command = 'w';
-            FIFO_INSERT(param->motor1Fifo, cmd2);
-            FIFO_INSERT(param->motor2Fifo, cmd2);
-        }
-        else {
-            printf("Moving Forward!\n");
-            cmd2.command = 'w';
-            FIFO_INSERT(param->motor1Fifo, cmd2);
-            FIFO_INSERT(param->motor2Fifo, cmd2);
-        }
-        
-        FIFO_INSERT(param->motor1Fifo, cmd2);
-        FIFO_INSERT(param->motor2Fifo, cmd2);
-
-
         wait_period(&timer_state, 10u);
-      }
-      }
+    }
     
-    cmd2.command = 's';
-    FIFO_INSERT(param->motor1Fifo, cmd2);
-    FIFO_INSERT(param->motor2Fifo, cmd2);
-    printf("LineTraceThread done\n");
+    printf("LineTrace function done\n");
     return NULL;
 }
 
+      
 
 
 void *Motor1Thread(void * arg)
@@ -1205,16 +1217,20 @@ void *DisplayThread(void *arg)
     struct draw_bitmap_multiwindow_handle_t * handle_GUI_gray = draw_bitmap_create_window(param->scaled_width, param->scaled_height);
     struct draw_bitmap_multiwindow_handle_t * handle_GUI_bw = draw_bitmap_create_window(param->scaled_width, param->scaled_height);
     struct draw_bitmap_multiwindow_handle_t * handle_GUI_shrinked = draw_bitmap_create_window(param->scaled_width, param->scaled_height);
+    struct draw_bitmap_multiwindow_handle_t * handle_GUI_shrinked2 = draw_bitmap_create_window(param->scaled_width, param->scaled_height);
     
     struct pixel_format_RGB *colorBuffer  = malloc(numPixels * sizeof(struct pixel_format_RGB));
     struct pixel_format_RGB *grayBuffer   = malloc(numPixels * sizeof(struct pixel_format_RGB));
     struct pixel_format_RGB *bwBuffer     = malloc(numPixels * sizeof(struct pixel_format_RGB));
     struct pixel_format_RGB *shrinkBuffer = malloc(numPixels * sizeof(struct pixel_format_RGB));
+    struct pixel_format_RGB *shrinkBuffer2 = malloc(numPixels * sizeof(struct pixel_format_RGB));
   
     const int targetWidth  = 32;
     const int targetHeight = 24;
     struct pixel_format_RGB *shrinkedData = malloc(targetWidth * targetHeight * sizeof(struct pixel_format_RGB));
+    struct pixel_format_RGB *shrinkedData2 = malloc(targetWidth * targetHeight * sizeof(struct pixel_format_RGB));
     struct pixel_format_RGB *upscaledData = malloc(param->scaled_width * param->scaled_height * sizeof(struct pixel_format_RGB));
+    struct pixel_format_RGB *upscaledData2 = malloc(param->scaled_width * param->scaled_height * sizeof(struct pixel_format_RGB));
     int scaleFactor = param->scaled_width / targetWidth;
     if (scaleFactor == 0)
         scaleFactor = 1;
@@ -1228,6 +1244,7 @@ void *DisplayThread(void *arg)
         memcpy(grayBuffer,   param->scaled_RGB_data, numPixels * sizeof(struct pixel_format_RGB));
         memcpy(bwBuffer,     param->scaled_RGB_data, numPixels * sizeof(struct pixel_format_RGB));
         memcpy(shrinkBuffer, param->scaled_RGB_data, numPixels * sizeof(struct pixel_format_RGB));
+        memcpy(shrinkBuffer2, param->scaled_RGB_data, numPixels * sizeof(struct pixel_format_RGB));
 
 
             
@@ -1260,15 +1277,12 @@ void *DisplayThread(void *arg)
             for (size_t i = 0; i < numPixels; i++)
             {
                 uint8_t gray = (bwBuffer[i].R + bwBuffer[i].G + bwBuffer[i].B) / 3;
-                uint8_t bw = (gray > 20) ? 255 : 0;
+                uint8_t bw = (gray > 128) ? 255 : 0;
                 bwBuffer[i].R = bw;
                 bwBuffer[i].G = bw;
                 bwBuffer[i].B = bw;
             }
-            
-            pthread_mutex_lock(&g_scaled_bw_data_lock);
-            memcpy(g_scaled_bw_data, bwBuffer, numPixels * sizeof(struct pixel_format_RGB));
-            pthread_mutex_unlock(&g_scaled_bw_data_lock);
+          
             draw_bitmap_display(handle_GUI_bw, bwBuffer);
         }
 
@@ -1283,13 +1297,15 @@ void *DisplayThread(void *arg)
                     
                     struct pixel_format_RGB spixel = shrinkBuffer[y2 * param->scaled_width + x2];
                     uint8_t gray = (spixel.R + spixel.G + spixel.B) / 3;
-                    uint8_t bw   = (gray > 215) ? 255 : 0;
+                    uint8_t bw   = (gray > 220) ? 255 : 0;
                     shrinkedData[y * targetWidth + x].R = bw;
                     shrinkedData[y * targetWidth + x].G = bw;
                     shrinkedData[y * targetWidth + x].B = bw;
                 }
             }
-
+            pthread_mutex_lock(&g_shrunk_data_lock);
+            memcpy(g_shrunk_data, shrinkedData, targetWidth * targetHeight * sizeof(struct pixel_format_RGB));
+            pthread_mutex_unlock(&g_shrunk_data_lock);
             for (int y = 0; y < (int)param->scaled_height; y++) {
                 for (int x = 0; x < (int)param->scaled_width; x++) {
                     int u = x * targetWidth / param->scaled_width;
@@ -1300,6 +1316,37 @@ void *DisplayThread(void *arg)
                 }
             }
             draw_bitmap_display(handle_GUI_shrinked, upscaledData);
+            
+            for (int y = 0; y < targetHeight; y++) {
+                for (int x = 0; x < targetWidth; x++) {
+                    int x2 = x * scaleFactor;
+                    int y2 = y * scaleFactor;
+                    if (x2 >= (int)param->scaled_width)  x2 = param->scaled_width - 1;
+                    if (y2 >= (int)param->scaled_height) y2 = param->scaled_height - 1;
+                    
+                    struct pixel_format_RGB spixel = shrinkBuffer2[y2 * param->scaled_width + x2];
+                    uint8_t gray = (spixel.R + spixel.G + spixel.B) / 3;
+                    uint8_t bw   = (gray > 20) ? 255 : 0;
+                    shrinkedData2[y * targetWidth + x].R = bw;
+                    shrinkedData2[y * targetWidth + x].G = bw;
+                    shrinkedData2[y * targetWidth + x].B = bw;
+                }
+            }
+            
+            pthread_mutex_lock(&g_shrunk_data_lock2);
+            memcpy(g_shrunk_data2, shrinkedData2, targetWidth * targetHeight * sizeof(struct pixel_format_RGB));
+            pthread_mutex_unlock(&g_shrunk_data_lock2);
+            
+            for (int y = 0; y < (int)param->scaled_height; y++) {
+                for (int x = 0; x < (int)param->scaled_width; x++) {
+                    int u = x * targetWidth / param->scaled_width;
+                    int v = y * targetHeight / param->scaled_height;
+                    if (u >= targetWidth)  u = targetWidth - 1;
+                    if (v >= targetHeight) v = targetHeight - 1;
+                    upscaledData2[y * param->scaled_width + x] = shrinkedData2[v * targetWidth + u];
+                }
+            }
+            draw_bitmap_display(handle_GUI_shrinked2, upscaledData2);
         }
         
         wait_period(&timer_state, 10);
@@ -1310,7 +1357,8 @@ void *DisplayThread(void *arg)
     free(bwBuffer);
     free(shrinkBuffer);
     free(shrinkedData);
-    free(upscaledData);
+    free(shrinkedData2);
+    free(upscaledData2);
     return NULL;
 }
 
