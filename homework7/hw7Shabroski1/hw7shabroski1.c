@@ -731,10 +731,17 @@ void *LineTraceThread(void *arg)
     wait_period_initialize(&timer_state);
     speed = 30;
     
+    // Use rows from 18 to the bottom of the 32x24 image.
     int startRow = 22;
-    int endRow = SHRUNK_H;
-    int halfRegion = SHRUNK_W / 4;
+    int endRow = SHRUNK_H - 1; 
+    
+    // Define region parameters.
+    int halfRegion = SHRUNK_W / 4;  // Half the distance from center to edge.
     int centerCol = SHRUNK_W / 2;
+    
+    // Center threshold: if the difference between left and right counts is
+    // less than or equal to this value, the robot will go forward.
+    int centerThreshold = 3;
     
     while (!*(param->quit_flag))
     {
@@ -743,31 +750,36 @@ void *LineTraceThread(void *arg)
             int leftCount = 0;
             int rightCount = 0;
             
-            // Lock and read the global shrunk image (g_shrunk_data2)
+            // Lock and read the global shrunk image (g_shrunk_data2).
             pthread_mutex_lock(&g_shrunk_data_lock2);
             for (int row = startRow; row < endRow; row++)
             {
-                // Left region: from centerCol - halfRegion to centerCol
+                // Left region: from centerCol - halfRegion to centerCol.
                 for (int x = centerCol - halfRegion; x < centerCol; x++) {
                     if (g_shrunk_data2[row * SHRUNK_W + x].R == 0)
                         leftCount++;
                 }
-                // Right region: from centerCol to centerCol + halfRegion
+                // Right region: from centerCol to centerCol + halfRegion.
                 for (int x = centerCol; x < centerCol + halfRegion; x++) {
                     if (g_shrunk_data2[row * SHRUNK_W + x].R == 0)
                         rightCount++;
                 }
             }
             pthread_mutex_unlock(&g_shrunk_data_lock2);
-        
 
                 //Turn left
             // Decision making based on which side has more black pixels.
-            if (leftCount > rightCount && leftCount > 0)
-            {
-                // Turn left
-                if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo)))
-                {
+            if (abs(leftCount - rightCount) <= centerThreshold) {
+                // The counts are nearly equal: go forward.
+                if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
+                    cmd2.command = 'w';
+                    FIFO_INSERT(param->motor1Fifo, cmd2);
+                    FIFO_INSERT(param->motor2Fifo, cmd2);
+                }
+            }
+            else if (leftCount > rightCount) {
+                // Turn left.
+                if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
                     cmd2.command = 's';
                     FIFO_INSERT(param->motor1Fifo, cmd2);
                     FIFO_INSERT(param->motor2Fifo, cmd2);
@@ -779,17 +791,16 @@ void *LineTraceThread(void *arg)
                     FIFO_INSERT(param->motor1Fifo, cmd2);
                     cmd2.command = 'w';
                     FIFO_INSERT(param->motor2Fifo, cmd2);
-                    wait_period(&timer_state, 100u);
+                    wait_period(&timer_state, 150u);
+                    
                     cmd2.command = 'w';
                     FIFO_INSERT(param->motor1Fifo, cmd2);
                     FIFO_INSERT(param->motor2Fifo, cmd2);
                 }
             }
-            else if (rightCount > leftCount && rightCount > 0)
-            {
-                // Turn right
-                if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo)))
-                {
+            else { // rightCount > leftCount.
+                // Turn right.
+                if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo))) {
                     cmd2.command = 's';
                     FIFO_INSERT(param->motor1Fifo, cmd2);
                     FIFO_INSERT(param->motor2Fifo, cmd2);
@@ -801,17 +812,8 @@ void *LineTraceThread(void *arg)
                     FIFO_INSERT(param->motor1Fifo, cmd2);
                     cmd2.command = 'x';
                     FIFO_INSERT(param->motor2Fifo, cmd2);
-                    wait_period(&timer_state, 100u);
-                    cmd2.command = 'w';
-                    FIFO_INSERT(param->motor1Fifo, cmd2);
-                    FIFO_INSERT(param->motor2Fifo, cmd2);
-                }
-            }
-            else
-            {
-                // If no significant black is found, simply go forward.
-                if (!(FIFO_FULL(param->motor1Fifo)) && !(FIFO_FULL(param->motor2Fifo)))
-                {
+                    wait_period(&timer_state, 150u);
+                    
                     cmd2.command = 'w';
                     FIFO_INSERT(param->motor1Fifo, cmd2);
                     FIFO_INSERT(param->motor2Fifo, cmd2);
@@ -824,6 +826,7 @@ void *LineTraceThread(void *arg)
     printf("LineTrace function done\n");
     return NULL;
 }
+
 
       
 
