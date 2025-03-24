@@ -1116,8 +1116,8 @@ void *LineTraceThread(void *arg)
     // - Half the image down (for a 48-pixel high image, that's row 24)
     // - 75% down (row 36)
     // - And row 40 as before.
-    const int scanRow1 = 48 / 2;          // 24
-    const int scanRow2 = (3 * 48) / 4;      // 36
+    const int scanRow1 = 34;          // 24
+    const int scanRow2 = 38;     // 36
     const int scanRow3 = 40;                // as before
 
     // Region width: we'll check the left/right quarters (16 pixels for a 64-wide image)
