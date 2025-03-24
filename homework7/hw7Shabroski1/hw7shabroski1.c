@@ -75,7 +75,8 @@ volatile bool mode1 =  true;
 volatile bool mode2 = false;
 volatile bool mode3 = false;
 volatile bool lineTracing = false;
-volatile int speed = 50;
+int speed = 50;
+pthread_mutex_t speedMutex = PTHREAD_MUTEX_INITIALIZER;
 volatile unsigned int angle = 30;
 struct draw_bitmap_multiwindow_handle_t *handle_GUI_color = NULL;
 struct draw_bitmap_multiwindow_handle_t *handle_GUI_gray = NULL;
@@ -101,6 +102,11 @@ unsigned int global_scaled_height = 0;
 struct pixel_format_RGB *g_scaled_bw_data = NULL;
 
 pthread_mutex_t g_scaled_bw_data_lock = PTHREAD_MUTEX_INITIALIZER;
+
+
+int laserPointX = -1;
+int laserPointY = -1;
+pthread_mutex_t laserPointMutex = PTHREAD_MUTEX_INITIALIZER;
 
 struct thread_command
 {
@@ -355,7 +361,7 @@ void *Control(void * arg)
                    
                     case 'k':     // 'k' decrease angle by 5
                     {
-                       if(angle != 5)
+                       if(angle != 0)
                         {
                           printf("Angle decreased!");
                           angle -= 10;
@@ -452,6 +458,7 @@ void *Control(void * arg)
                       {
                         mode1 = true;
                         mode2 = false;
+                        mode3 = false;
                         stop = true;
                         forward = false;
                         backward = false;
@@ -509,7 +516,7 @@ void *Control(void * arg)
                  
                   case 'k':     // 'k' decrease angle by 5
                   {
-                     if(angle != 5)
+                     if(angle != 0)
                       {
                         printf("Angle decreased!");
                         angle -= 10;
@@ -750,7 +757,7 @@ void *Control(void * arg)
                     case 'k':     // 'k' decrease angle by 5
                     {
                       
-                        if(angle != 5)
+                        if(angle != 0)
                         {
                           printf("Angle decreased!");
                         angle -= 10;
@@ -1001,6 +1008,10 @@ void *LaserThread(void *arg)
                           else                         
                           {foundBox = BOX_BOTTOM_RIGHT;}
                       }
+                      pthread_mutex_lock(&laserPointMutex);
+                      laserPointX = x * 5 + 5/2;
+                      laserPointY = y * 5 + 5/2;
+                      pthread_mutex_unlock(&laserPointMutex);
                       foundLaser = true;
                   }
               }
@@ -1112,32 +1123,29 @@ void *LineTraceThread(void *arg)
     struct line_trace_thread_param *param = (struct line_trace_thread_param *)arg;
     struct thread_command cmd2 = {0, 0};
     struct timespec timer_state;
-    // Define three scan rows:
-    // - Half the image down (for a 48-pixel high image, that's row 24)
-    // - 75% down (row 36)
-    // - And row 40 as before.
-    const int scanRow1 = 34;          // 24
-    const int scanRow2 = 38;     // 36
-    const int scanRow3 = 40;                // as before
+    //Rows we will scan
+    const int scanRow1 = 34; 
+    const int scanRow2 = 38;  
+    const int scanRow3 = 40;     
 
-    // Region width: we'll check the left/right quarters (16 pixels for a 64-wide image)
-    const int regionWidth = SHRUNK_W / 4;   // 16 when SHRUNK_W is 64
+    //Check only this section for left and right side
+    const int regionWidth = SHRUNK_W / 4;
 
     while (!*(param->quit_flag))
     {
         if (mode2 && !stop)
         {
+            //Set our bools initially to false, declare the rows we will scan, then scan the rows left and right side.
             bool leftBlackDetected  = false;
             bool rightBlackDetected = false;
-            // Lock the correct buffer
+            
             pthread_mutex_lock(&g_shrunk_data_lock2);
-
-            // List of rows to scan.
+            //Go through each of our rows.
             int scanRows[3] = {scanRow1, scanRow2, scanRow3};
             for (int i = 0; i < 3; i++)
             {
                 int row = scanRows[i];
-                // Check left region if not already detected
+                //Check Left side
                 if (!leftBlackDetected)
                 {
                     for (int x = 0; x < regionWidth; x++)
@@ -1149,7 +1157,7 @@ void *LineTraceThread(void *arg)
                         }
                     }
                 }
-                // Check right region if not already detected
+                //Check right side
                 if (!rightBlackDetected)
                 {
                     for (int x = SHRUNK_W - regionWidth; x < SHRUNK_W; x++)
@@ -1165,12 +1173,8 @@ void *LineTraceThread(void *arg)
 
             pthread_mutex_unlock(&g_shrunk_data_lock2);
             
-            printf("DEBUG: leftBlackDetected=%s, rightBlackDetected=%s\n",
-                   leftBlackDetected ? "true" : "false",
-                   rightBlackDetected ? "true" : "false");
 
-            // Decide movement: if only left is detected, turn left;
-            // if only right is detected, turn right; otherwise, go straight.
+            //Turn right
             if (!leftBlackDetected && rightBlackDetected)
             {
                 printf("Turning right!\n");
@@ -1196,6 +1200,7 @@ void *LineTraceThread(void *arg)
                               FIFO_INSERT( param->motor2Fifo, cmd2 );
 
             }
+            //Turn left
             else if (!rightBlackDetected && leftBlackDetected)
             {
                 printf("Turning left!\n");
@@ -1220,6 +1225,7 @@ void *LineTraceThread(void *arg)
                               cmd2.command = 'w';
                               FIFO_INSERT( param->motor2Fifo, cmd2 );
             }
+            //Go forward
             else
             {
                 cmd2.command = 'w';
@@ -1227,6 +1233,7 @@ void *LineTraceThread(void *arg)
                 FIFO_INSERT(param->motor2Fifo, cmd2);
             }
         }
+        //If not stopped in mode2 we stop.
         else if (mode2)
         {
             if (stop)
@@ -1621,18 +1628,22 @@ void overlayCrosshair(struct pixel_format_RGB *buffer, unsigned int width, unsig
     }
 }
 
+
+//Draws our 3x3 grid to see where we can aim laser on blacked out window.
 void overlay3x3Grid(struct pixel_format_RGB *buffer, unsigned int width, unsigned int height)
 {
     int topEnd    = 20;
     int midEnd    = 28;
     int leftEnd   = 24;
     int centerEnd = 40;  
-
+    
+    //Because how arrays work 0th indexed we need to - 1
     if (topEnd    >= (int)height) topEnd    = height - 1;
     if (midEnd    >= (int)height) midEnd    = height - 1;
     if (leftEnd   >= (int)width ) leftEnd   = width  - 1;
     if (centerEnd >= (int)width ) centerEnd = width  - 1;
 
+    //These draw the lines
     for (unsigned int x = 0; x < width; x++) {
         buffer[topEnd * width + x].R = 255;
         buffer[topEnd * width + x].G = 0;
@@ -1656,6 +1667,43 @@ void overlay3x3Grid(struct pixel_format_RGB *buffer, unsigned int width, unsigne
         buffer[y * width + centerEnd].R = 255;
         buffer[y * width + centerEnd].G = 0;
         buffer[y * width + centerEnd].B = 0;
+    }
+}
+
+
+
+//Draws a box around inputted pixel.
+//Purpose is drawing a box around the laser pixel we input.
+
+void drawBox(struct pixel_format_RGB *buffer, int imageWidth, int imageHeight,
+              int x, int y, int boxSize)
+{
+    //Computations for where the lines need to go
+    int halfSize = boxSize / 2;
+    int left   = (x - halfSize < 0) ? 0 : x - halfSize;
+    int right  = (x + halfSize >= imageWidth) ? imageWidth - 1 : x + halfSize;
+    int top    = (y - halfSize < 0) ? 0 : y - halfSize;
+    int bottom = (y + halfSize >= imageHeight) ? imageHeight - 1 : y + halfSize;
+    
+    //Draw the lines
+    for (int i = left; i <= right; i++) {
+        buffer[top * imageWidth + i].R = 0;
+        buffer[top * imageWidth + i].G = 255;
+        buffer[top * imageWidth + i].B = 0;
+        
+        buffer[bottom * imageWidth + i].R = 0;
+        buffer[bottom * imageWidth + i].G = 255;
+        buffer[bottom * imageWidth + i].B = 0;
+    }
+    
+    for (int j = top; j <= bottom; j++) {
+        buffer[j * imageWidth + left].R = 0;
+        buffer[j * imageWidth + left].G = 255;
+        buffer[j * imageWidth + left].B = 0;
+        
+        buffer[j * imageWidth + right].R = 0;
+        buffer[j * imageWidth + right].G = 255;
+        buffer[j * imageWidth + right].B = 0;
     }
 }
 
@@ -1695,6 +1743,7 @@ void *DisplayThread(void *arg)
     while (!*(param->quit_flag))
     {
       
+        //If we want to actually close the windows do it here. If we are just pausing them (saves computation time) we can just use global variables.
         if(showColor == false)
         {
 
@@ -1744,7 +1793,18 @@ void *DisplayThread(void *arg)
         
         if (showColor && handle_GUI_color != NULL)
         {
-            overlayCrosshair(colorBuffer, param->scaled_width, param->scaled_height);
+            
+            int lx, ly;
+            pthread_mutex_lock(&laserPointMutex);
+            lx = laserPointX;
+            ly = laserPointY;
+            pthread_mutex_unlock(&laserPointMutex);
+            
+            if(lx != -1 && ly != -1) 
+            {
+              drawBox(colorBuffer, param->scaled_width, param->scaled_height, lx, ly, 20);
+            }
+                      
             draw_bitmap_display(handle_GUI_color, colorBuffer);
         }
 
