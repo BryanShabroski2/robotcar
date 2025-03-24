@@ -1107,105 +1107,137 @@ void *LaserThread(void *arg)
 
 }
 
-void *LineTraceThread(void * arg)
+void *LineTraceThread(void *arg)
 {
-    struct line_trace_thread_param * param = (struct line_trace_thread_param *)arg;
+    struct line_trace_thread_param *param = (struct line_trace_thread_param *)arg;
     struct thread_command cmd2 = {0, 0};
     struct timespec timer_state;
-    
-    // For a 32-pixel wide image, threshold was 8.
-    // Now that SHRUNK_W is 64, we double the threshold.
-    int threshold = 8;  
+    // Define three scan rows:
+    // - Half the image down (for a 48-pixel high image, that's row 24)
+    // - 75% down (row 36)
+    // - And row 40 as before.
+    const int scanRow1 = 48 / 2;          // 24
+    const int scanRow2 = (3 * 48) / 4;      // 36
+    const int scanRow3 = 40;                // as before
 
-    // Calculate the vertical band to examine based on the image height.
-    // For SHRUNK_H == 48, this will examine rows 22 to 26.
-    int middleStart = 42;  
-    int middleEnd   = 46;  
+    // Region width: we'll check the left/right quarters (16 pixels for a 64-wide image)
+    const int regionWidth = SHRUNK_W / 4;   // 16 when SHRUNK_W is 64
 
     while (!*(param->quit_flag))
     {
         if (mode2 && !stop)
         {
-                speed = 30;
-            int blackCount = 0;
-            int sumX       = 0;
+            bool leftBlackDetected  = false;
+            bool rightBlackDetected = false;
+            // Lock the correct buffer
+            pthread_mutex_lock(&g_shrunk_data_lock2);
 
-            pthread_mutex_lock(&g_shrunk_data_lock);
-            for (int row = middleStart; row <= middleEnd; row++)
+            // List of rows to scan.
+            int scanRows[3] = {scanRow1, scanRow2, scanRow3};
+            for (int i = 0; i < 3; i++)
             {
-                for (int x = 0; x < SHRUNK_W; x++)
+                int row = scanRows[i];
+                // Check left region if not already detected
+                if (!leftBlackDetected)
                 {
-                    uint8_t pixelVal = g_shrunk_data[row * SHRUNK_W + x].R;
-                    if (pixelVal == 0)
+                    for (int x = 0; x < regionWidth; x++)
                     {
-                        blackCount++;
-                        sumX += x;
+                        if (g_shrunk_data2[row * SHRUNK_W + x].R == 0)
+                        {
+                            leftBlackDetected = true;
+                            break;
+                        }
+                    }
+                }
+                // Check right region if not already detected
+                if (!rightBlackDetected)
+                {
+                    for (int x = SHRUNK_W - regionWidth; x < SHRUNK_W; x++)
+                    {
+                        if (g_shrunk_data2[row * SHRUNK_W + x].R == 0)
+                        {
+                            rightBlackDetected = true;
+                            break;
+                        }
                     }
                 }
             }
-            pthread_mutex_unlock(&g_shrunk_data_lock);
 
-            // Process the line if any black pixels were detected.
-            if (blackCount > 0)
+            pthread_mutex_unlock(&g_shrunk_data_lock2);
+            
+            printf("DEBUG: leftBlackDetected=%s, rightBlackDetected=%s\n",
+                   leftBlackDetected ? "true" : "false",
+                   rightBlackDetected ? "true" : "false");
+
+            // Decide movement: if only left is detected, turn left;
+            // if only right is detected, turn right; otherwise, go straight.
+            if (!leftBlackDetected && rightBlackDetected)
             {
-                int centerX = sumX / blackCount;
-                int centerOfImage = SHRUNK_W / 2;
+                printf("Turning right!\n");
+                              cmd2.command = 's';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 's';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                              cmd2.command = 'w';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 'x';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                              cmd2.command = 'w';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 'x';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                              cmd2.command = 'w';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 'x';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                              cmd2.command = 'w';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 'x';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
 
-                // Turn left if the detected center is to the left of the center minus threshold.
-                if (centerX < (centerOfImage - threshold)) {
-                    printf("Turning Left!\n");
-                    cmd2.command = 's';
-                    FIFO_INSERT(param->motor1Fifo, cmd2);
-                    FIFO_INSERT(param->motor2Fifo, cmd2);
-                    wait_period(&timer_state, 60u);
-                    cmd2.command = 'l';
-                    FIFO_INSERT(param->pwmFifo, cmd2);
-                    cmd2.command = 'x';
-                    FIFO_INSERT(param->motor1Fifo, cmd2);
-                    cmd2.command = 'w';
-                    FIFO_INSERT(param->motor2Fifo, cmd2);
-                    wait_period(&timer_state, 250u);
-                    cmd2.command = 'w';
-                    FIFO_INSERT(param->motor1Fifo, cmd2);
-                    FIFO_INSERT(param->motor2Fifo, cmd2);
-                }
-                // Turn right if the detected center is to the right of the center plus threshold.
-                else if (centerX > (centerOfImage + threshold)) {
-                    printf("Correcting: Turning Right!\n");
-                    cmd2.command = 's';
-                    FIFO_INSERT(param->motor1Fifo, cmd2);
-                    FIFO_INSERT(param->motor2Fifo, cmd2);
-                    wait_period(&timer_state, 60u);
-                    cmd2.command = 't';
-                    FIFO_INSERT(param->pwmFifo, cmd2);
-                    cmd2.command = 'w';
-                    FIFO_INSERT(param->motor1Fifo, cmd2);
-                    cmd2.command = 'x';
-                    FIFO_INSERT(param->motor2Fifo, cmd2);
-                    wait_period(&timer_state, 250u);
-                    cmd2.command = 'w';
-                    FIFO_INSERT(param->motor1Fifo, cmd2);
-                    FIFO_INSERT(param->motor2Fifo, cmd2);
-                }
-                // Otherwise, continue going straight.
-                else{
-                    cmd2.command = 'w';
-                    FIFO_INSERT(param->motor1Fifo, cmd2);
-                    FIFO_INSERT(param->motor2Fifo, cmd2);
-                    wait_period(&timer_state, 250u);
-                }
+            }
+            else if (!rightBlackDetected && leftBlackDetected)
+            {
+                printf("Turning left!\n");
+                              cmd2.command = 's';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 's';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                              cmd2.command = 'x';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 'w';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                              cmd2.command = 'x';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 'w';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                              cmd2.command = 'x';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 'w';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
+                              cmd2.command = 'x';
+                              FIFO_INSERT( param->motor1Fifo, cmd2 );
+                              cmd2.command = 'w';
+                              FIFO_INSERT( param->motor2Fifo, cmd2 );
             }
             else
             {
-                // If no line is detected, send a stop command.
-                cmd2.command = 's';
-                cmd2.argument = 0;
+                cmd2.command = 'w';
                 FIFO_INSERT(param->motor1Fifo, cmd2);
                 FIFO_INSERT(param->motor2Fifo, cmd2);
             }
         }
-        // Sync with frame rate
-        wait_period(&timer_state, 50u);
+        else if (mode2)
+        {
+            if (stop)
+            {
+                cmd2.command = 's';
+                FIFO_INSERT(param->motor1Fifo, cmd2);
+                FIFO_INSERT(param->motor2Fifo, cmd2);
+            }
+        }
+
+        wait_period(&timer_state, 10u);
     }
 
     printf("LineTrace function done\n");
@@ -1263,7 +1295,7 @@ void *Motor1Thread(void * arg)
 
           case 'w': //Forward
           {
-            printf("Motor thread %s processing 'w'\n", param->name);
+            //printf("Motor thread %s processing 'w'\n", param->name);
               GPIO_SET(param->gpio, 12);
               GPIO_SET(param->gpio, 13);
               GPIO_CLR(param->gpio, 05);
@@ -1377,7 +1409,7 @@ void *Motor2Thread(void * arg)
 
           case 'w': //Forward
           {
-              printf("Motor thread %s processing 'w'\n", param->name);
+              //printf("Motor thread %s processing 'w'\n", param->name);
               GPIO_SET(param->gpio, 12);
               GPIO_SET(param->gpio, 13);
               GPIO_SET(param->gpio, 22);
@@ -1460,7 +1492,6 @@ void *SpeedThread(void * arg)
 
   // start 10ms timed wait
   wait_period_initialize( &timer_state );
-  wait_period( &timer_state, 10u ); /* 10ms */
  
   while (!*(param->quit_flag))
   {
@@ -1479,7 +1510,7 @@ void *SpeedThread(void * arg)
             speed = 100;
             param->io->pwm->DAT1 = speed;
             param->io->pwm->DAT2 = speed;
-            printf("Speed for turn. Speed is now: %d%\n", speed);
+            //printf("Speed for turn. Speed is now: %d%\n", speed);
             wait_period( &timer_state, 75u );
             speed = temp;
           }
@@ -1487,10 +1518,10 @@ void *SpeedThread(void * arg)
           case 'l':  //L for  line trace turn, we change the speed to 100 and wait the same period the turn takes.
           {
             int temp = speed;
-            speed = 40;
+            speed = 70;
             param->io->pwm->DAT1 = speed;
             param->io->pwm->DAT2 = speed;
-            printf("Speed for turn. Speed is now: %d%\n", speed);
+           // printf("Speed for turn. Speed is now: %d%\n", speed);
             wait_period( &timer_state, 75u );
             speed = temp;
           }
