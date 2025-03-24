@@ -1,5 +1,7 @@
 /**************************************************
-* Homework 7, pthread and FIFO queue Sample 3 Program
+* Homework 8, Robocar with manual control, linetracing, and laser following. (Mode1), (Mode2), (Mode3)
+* Hardware: Rasperry PI.
+* 
 * By Bryan Shabroski
 * CMPEN 473, Spring 2023, Penn State University
 *
@@ -7,7 +9,6 @@
 * Revision V2.1 On 03/07/2022
 * Revision V1.0 On 02/04/2018
 *
-* Manual control and camera line following with camera.
 *
 ***************************************************/
 //Added laser thread, laser thread param and stuff in main. Added mode3.
