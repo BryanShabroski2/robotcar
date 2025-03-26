@@ -54,6 +54,27 @@
 #define ROUND_DIVISION(x,y) (((x) + (y)/2)/(y))
 
 
+union uint16_to_2uint8
+{
+  struct uint16_to_2uint8_field
+  {
+    uint8_t   L;  /* Little Endian byte order means that the least significant byte goes in the lowest address */
+    uint8_t   H;
+  }         field;
+  uint16_t  unsigned_value;
+  int16_t   signed_value;
+};
+
+
+struct calibration_data
+{
+  float scale;
+  float offset_x;
+  float offset_y;
+  float offset_z;
+};
+
+
 typedef enum {
   BOX_NONE,
   BOX_TOP_LEFT,
@@ -175,7 +196,7 @@ struct line_trace_thread_param
 
 struct laser_thread_param
 {
-  const char                    * name;      
+    const char                    * name;      
     struct fifo_t                 * motor1Fifo;
     struct fifo_t                 * motor2Fifo;
     struct fifo_t                 * pwmFifo;    
@@ -207,6 +228,16 @@ struct shapes_thread_param
   struct fifo_t                 * motor1Fifo;
   struct fifo_t                 * motor2Fifo;
   struct fifo_t                 * pwmFifo;
+  bool                          * quit_flag;
+};
+
+struct imu_thread_param
+{
+  const char                    * name;
+  struct io_peripherals         * io;
+  struct calibration_data       * calibration_accelerometer;
+  struct calibration_data       * calibration_gyroscope;
+  struct calibration_data       * calibration_magnetometer;
   bool                          * quit_flag;
 };
 
@@ -301,276 +332,16 @@ void *Control(void * arg)
                 {
                     case 'm':
                     {
-                        modeSwitchFlag = true;
-                      }
-                        break;
-
-                    case '1':
-                    {
-                        if (modeSwitchFlag)
-                        {
-                            mode1 = true;
-                            mode2 = false;
-                            mode3 = false;
-                            stop = false;
-                            forward = false;
-                            backward = false;
-                            lineTracing = false;
-                            printf("Switched to Mode 1\n");
-                            modeSwitchFlag = false;
-                     
-                      }
-                    }
-                        break;
-                        case '3':
-                        {
-                            if (modeSwitchFlag)
-                            {
-                              mode1 = false;
-                              mode2 = false;
-                              mode3 = true;
-                              stop = false;
-                              forward = false;
-                              backward = false;
-                              lineTracing = false;
-                              printf("Switched to Mode 3\n");
-                              modeSwitchFlag = false;
-                         
-                          }
-                        }
-                            break;
-                     
-                    case 'i':     // 'i' increase pwm by 5
-                    {
-                        cmd2.command = '+'; //+ for +5
-                     
-                      if (!(FIFO_FULL( param->pwmFifo)))
-                      {FIFO_INSERT( param->pwmFifo, cmd2 );}
-                      else {printf( "pwm fifo queue full\n" );}
-                    }
-                    break;
-                   
-                    case 'j':     // 'j' decrease pwm by 5
-                    {
-                       
-                        cmd2.command = '-'; //- for -5
-                       
-                      if (!(FIFO_FULL( param->pwmFifo)))
-                      {FIFO_INSERT( param->pwmFifo, cmd2 );}
-                      else {printf( "pwm fifo queue full\n" );}
-                    }
-                    break;
-                    case 'o':     // 'o' increase angle by 5
-                    {
-                        if(angle != 180)
-                        {
-                          printf("Angle increased!");
-                          angle += 10;
-                          }
-                        else{printf("Max Angle Reached!");}
-                    }
-                    break;
-                   
-                    case 'k':     // 'k' decrease angle by 5
-                    {
-                       if(angle != 0)
-                        {
-                          printf("Angle decreased!");
-                          angle -= 10;
-                          }
-                        else{printf("Min Angle Reached!");}
-                    }
-                    break;
-
-                    case 's':
-                    {
-                        if (!stop)
-                        {
-                            printf("Stopping in Mode 2!\n");
-                            stop = true;
-                            lineTracing = false;
-                            cmd2.command = 's';
-                            cmd2.argument = 0;
-                            FIFO_INSERT(param->motor1Fifo, cmd2);
-                            FIFO_INSERT(param->motor2Fifo, cmd2);
-                        }
-                        else
-                        {
-                            printf("Already stopped in Mode 2.\n");
-                        }
-                      }
-                        break;
-
-                    case 'w':
-                    {
-                        if (stop)
-                        {
-                            printf("Starting Line Tracing!\n");
-                            stop = false;
-                            lineTracing = true;
-                        }
-                      }
-                        break;
-                     
-                    case 'c':
-                    {
-                        showColor = !showColor;
-                    }
-                    break;
-
-                    case 'v':
-                    {
-                        showGray = !showGray;
-                    }
-                    break;
-
-                    case 'b':
-                    {
-                        showBlackWhite = !showBlackWhite;
-                    }
-                    break;
-
-                    case 'n':
-                    {
-                        showShrinked = !showShrinked;
-                    }
-                    break;
-
-
-                    case 113:
-                    {
-                        cmd2.command = 113;
-                        cmd2.argument = 0;
-                        FIFO_INSERT(param->motor1Fifo, cmd2);
-                        FIFO_INSERT(param->motor2Fifo, cmd2);
-                      }
-                        break;
-
-                    default:
-                    {
-                        modeSwitchFlag = false;
-                        printf("Ignored input: Mode 2 is active.\n");
-                      }
-                        break;
-                }
-            }
-            else if(mode3)
-            {
-              switch (cmd1.command)
-              {
-                  case 'm':
-                  {
-                      modeSwitchFlag = true;
-                    }
-                      break;
-
-                  case '1':
-                  {
-                      if (modeSwitchFlag)
-                      {
-                        mode1 = true;
-                        mode2 = false;
-                        mode3 = false;
-                        stop = true;
-                        forward = false;
-                        backward = false;
-                        lineTracing = false;
-                        printf("Switched to Mode 1\n");
-                        modeSwitchFlag = false;
-                   
-                    }
-                  }
-                  break;
-                  case '2':
-                  {
-                      if (modeSwitchFlag)
-                      {
-                        mode1 = false;
-                        mode2 = true;
-                        mode3 = false;
-                        printf("Switched to Mode 2\n");
-                        modeSwitchFlag = false;
-                   
-                    }
-                  }
-                      break;
-                   
-                  case 'i':     // 'i' increase pwm by 5
-                  {
-                      cmd2.command = '+'; //+ for +5
-                   
-                    if (!(FIFO_FULL( param->pwmFifo)))
-                    {FIFO_INSERT( param->pwmFifo, cmd2 );}
-                    else {printf( "pwm fifo queue full\n" );}
-                  }
-                  break;
-                 
-                  case 'j':     // 'j' decrease pwm by 5
-                  {
-                     
-                      cmd2.command = '-'; //- for -5
-                     
-                    if (!(FIFO_FULL( param->pwmFifo)))
-                    {FIFO_INSERT( param->pwmFifo, cmd2 );}
-                    else {printf( "pwm fifo queue full\n" );}
-                  }
-                  break;
-                  //Square
-                  case 'w':
-                  {
-                      cmd2.command = 'S';
-                      if(!(FIFO_FULL(param->shapesFifo)))
-                      {
-                        FIFO_INSERT(param->shapesFifo, cmd2);
-                        }
-                    }
-                      break;
-                  //Triangle
-                  case 'u':
-                  {
-                      cmd2.command = 't';
-                      if(!(FIFO_FULL(param->shapesFifo)))
-                      {
-                        FIFO_INSERT(param->shapesFifo, cmd2);
-                        }
-                    }
-                      break;
-                   
-
-                  case 113:
-                  {
-                      cmd2.command = 113;
-                      cmd2.argument = 0;
-                      FIFO_INSERT(param->motor1Fifo, cmd2);
-                      FIFO_INSERT(param->motor2Fifo, cmd2);
-                    }
-                      break;
-
-                  default:
-                  {
-                      modeSwitchFlag = false;
-                      printf("Ignored input: Mode 3 is active.\n");
-                    }
-                      break;
-              }
-
-
-            }
-            else{
-                  switch (cmd1.command)
-                  {
-                    case 'm':
-                    {
                     modeSwitchFlag = true;
                   }
                     break;
 
-                  case '2':
+                  case '1':
                   {
                   if (modeSwitchFlag)
                   {
-                    mode1 = false;
-                    mode2 = true;
+                    mode1 = true;
+                    mode2 = false;
                     mode3 = false;
                     printf("Switched to Mode 2\n");
                     modeSwitchFlag = false;
@@ -587,7 +358,6 @@ void *Control(void * arg)
                       forward = false;
                       backward = false;
                       stop = false;
-                      lineTracing = false;
                       printf("Switched to Mode 3\n");
                       modeSwitchFlag = false;
                       }
@@ -888,8 +658,209 @@ void *Control(void * arg)
                     break;
 
                   }
-    }
-    }
+            }
+            else if(mode3)
+            {
+              switch (cmd1.command)
+              {
+                  case 'm':
+                  {
+                      modeSwitchFlag = true;
+                    }
+                      break;
+
+                  case '1':
+                  {
+                      if (modeSwitchFlag)
+                      {
+                        mode1 = true;
+                        mode2 = false;
+                        mode3 = false;
+                        stop = true;
+                        forward = false;
+                        backward = false;
+                        printf("Switched to Mode 1\n");
+                        modeSwitchFlag = false;
+                   
+                    }
+                  }
+                  break;
+                  case '2':
+                  {
+                      if (modeSwitchFlag)
+                      {
+                        mode1 = false;
+                        mode2 = true;
+                        mode3 = false;
+                        printf("Switched to Mode 2\n");
+                        modeSwitchFlag = false;
+                   
+                    }
+                  }
+                      break;
+                   
+                  case 'i':     // 'i' increase pwm by 5
+                  {
+                      cmd2.command = '+'; //+ for +5
+                   
+                    if (!(FIFO_FULL( param->pwmFifo)))
+                    {FIFO_INSERT( param->pwmFifo, cmd2 );}
+                    else {printf( "pwm fifo queue full\n" );}
+                  }
+                  break;
+                 
+                  case 'j':     // 'j' decrease pwm by 5
+                  {
+                     
+                      cmd2.command = '-'; //- for -5
+                     
+                    if (!(FIFO_FULL( param->pwmFifo)))
+                    {FIFO_INSERT( param->pwmFifo, cmd2 );}
+                    else {printf( "pwm fifo queue full\n" );}
+                  }
+                  break;
+                  //Square
+                  case 'w':
+                  {
+                      cmd2.command = 'S';
+                      if(!(FIFO_FULL(param->shapesFifo)))
+                      {
+                        FIFO_INSERT(param->shapesFifo, cmd2);
+                        }
+                    }
+                      break;
+                  //Triangle
+                  case 'u':
+                  {
+                      cmd2.command = 't';
+                      if(!(FIFO_FULL(param->shapesFifo)))
+                      {
+                        FIFO_INSERT(param->shapesFifo, cmd2);
+                        }
+                    }
+                      break;
+                   
+
+                  case 113:
+                  {
+                      cmd2.command = 113;
+                      cmd2.argument = 0;
+                      FIFO_INSERT(param->motor1Fifo, cmd2);
+                      FIFO_INSERT(param->motor2Fifo, cmd2);
+                    }
+                      break;
+
+                  default:
+                  {
+                      modeSwitchFlag = false;
+                      printf("Ignored input: Mode 3 is active.\n");
+                    }
+                      break;
+              }
+
+
+            }
+            else{
+                  switch (cmd1.command)
+              {
+                  case 'm':
+                  {
+                      modeSwitchFlag = true;
+                    }
+                      break;
+
+                  case '2':
+                  {
+                      if (modeSwitchFlag)
+                      {
+                        mode1 = false;
+                        mode2 = true;
+                        mode3 = false;
+                        stop = false;
+                        forward = false;
+                        backward = false;
+                        printf("Switched to Mode 2\n");
+                        modeSwitchFlag = false;
+                   
+                    }
+                  }
+                  break;
+                  case '3':
+                  {
+                      if (modeSwitchFlag)
+                      {
+                        mode1 = false;
+                        mode2 = false;
+                        mode3 = true;
+                        printf("Switched to Mode 3\n");
+                        modeSwitchFlag = false;
+                   
+                    }
+                  }
+                      break;
+                   
+                  case 'i':     // 'i' increase pwm by 5
+                  {
+                      cmd2.command = '+'; //+ for +5
+                   
+                    if (!(FIFO_FULL( param->pwmFifo)))
+                    {FIFO_INSERT( param->pwmFifo, cmd2 );}
+                    else {printf( "pwm fifo queue full\n" );}
+                  }
+                  break;
+                 
+                  case 'j':     // 'j' decrease pwm by 5
+                  {
+                     
+                      cmd2.command = '-'; //- for -5
+                     
+                    if (!(FIFO_FULL( param->pwmFifo)))
+                    {FIFO_INSERT( param->pwmFifo, cmd2 );}
+                    else {printf( "pwm fifo queue full\n" );}
+                  }
+                  break;
+                  //Square
+                  case 'w':
+                  {
+                      cmd2.command = 'S';
+                      if(!(FIFO_FULL(param->shapesFifo)))
+                      {
+                        FIFO_INSERT(param->shapesFifo, cmd2);
+                        }
+                    }
+                      break;
+                  //Triangle
+                  case 'u':
+                  {
+                      cmd2.command = 't';
+                      if(!(FIFO_FULL(param->shapesFifo)))
+                      {
+                        FIFO_INSERT(param->shapesFifo, cmd2);
+                        }
+                    }
+                      break;
+                   
+
+                  case 113:
+                  {
+                      cmd2.command = 113;
+                      cmd2.argument = 0;
+                      FIFO_INSERT(param->motor1Fifo, cmd2);
+                      FIFO_INSERT(param->motor2Fifo, cmd2);
+                    }
+                      break;
+
+                  default:
+                  {
+                      modeSwitchFlag = false;
+                      printf("Ignored input: Mode 3 is active.\n");
+                    }
+                      break;
+              }
+
+
+            }
+                }
 
     wait_period( &timer_state, 10u ); /* 10ms */
 
@@ -1077,7 +1048,7 @@ void *LaserThread(void *arg)
 
 void *LineTraceThread(void *arg)
 {
-    struct line_trace_thread_param *param = (struct line_trace_thread_param *)arg;
+/*    struct line_trace_thread_param *param = (struct line_trace_thread_param *)arg;
     struct thread_command cmd2 = {0, 0};
     struct timespec timer_state;
     //Rows we will scan
@@ -1205,7 +1176,7 @@ void *LineTraceThread(void *arg)
     }
 
     printf("LineTrace function done\n");
-    return NULL;
+    return NULL;*/
 }
 
 
@@ -1579,7 +1550,7 @@ void *SpeedThread(void * arg)
 
 
 //Takes in our image buffer width and heigh than creates a cross hair.
-void overlayCrosshair(struct pixel_format_RGB *buffer, unsigned int width, unsigned int height) 
+/*void overlayCrosshair(struct pixel_format_RGB *buffer, unsigned int width, unsigned int height) 
 {
     unsigned int centerX = width / 2;
     unsigned int centerY = height / 2;
@@ -1672,13 +1643,13 @@ void drawBox(struct pixel_format_RGB *buffer, int imageWidth, int imageHeight,
         buffer[j * imageWidth + right].G = 255;
         buffer[j * imageWidth + right].B = 0;
     }
-}
+}*/
 
 
 
 void *DisplayThread(void *arg)
 {
-    struct camera_thread_param *param = (struct camera_thread_param *)arg;
+ /*   struct camera_thread_param *param = (struct camera_thread_param *)arg;
     struct timespec timer_state;
     wait_period_initialize(&timer_state);
     
@@ -1881,7 +1852,7 @@ void *DisplayThread(void *arg)
     free(shrinkedData);
     free(shrinkedData2);
     free(upscaledData2);
-    return NULL;
+    return NULL;*/
 }
 
 
@@ -1982,8 +1953,7 @@ void *ShapesThread(void *arg)
         }
       }
     }
-      wait_period( &timer_state, 10u ); /* 10ms */
-
+      wait_period( &timer_state, 10u );
   }
 
   printf( "%s function done\n", param->name );
@@ -1992,14 +1962,578 @@ void *ShapesThread(void *arg)
   
 }
 
+// READ REG
+void read_MPU9250_registers(                          /* read a register */
+    uint8_t                         I2C_address,      /* the address of the I2C device to talk to */
+    MPU9250_REGISTER                register_address, /* the address to read from */
+    uint8_t *                       read_data,        /* the data read from the SPI device */
+    size_t                          data_length,      /* the length of data to send/receive */
+    volatile struct bsc_register *  bsc )             /* the BSC address */
+{
+  bsc->S.field.DONE    = 1;
+  bsc->A.field.ADDR    = I2C_address;
+  bsc->C.field.READ    = 0;
+  bsc->DLEN.field.DLEN = 1;
+  bsc->FIFO.value      = register_address;
+  bsc->C.field.ST      = 1;
+  while (bsc->S.field.DONE == 0)
+  {
+    usleep( 100 );
+  }
+  bsc->S.field.DONE    = 1;
+  bsc->A.field.ADDR    = I2C_address;
+  bsc->C.field.READ    = 1;
+  bsc->DLEN.field.DLEN = data_length;
+  bsc->C.field.ST      = 1;
+  while (bsc->S.field.DONE == 0)
+  {
+    usleep( 100 );
+  }
+
+  while (data_length > 0)
+  {
+    *read_data = bsc->FIFO.field.DATA;
+
+    read_data++;
+    data_length--;
+  }
+
+  return;
+}
+
+// READ REG
+union MPU9250_transaction_field_data read_MPU9250_register( /* read a register, returning the read value */
+    uint8_t                         I2C_address,            /* the address of the I2C device to talk to */
+    MPU9250_REGISTER                register_address,       /* the address to read from */
+    volatile struct bsc_register *  bsc )                   /* the BSC address */
+{
+  union MPU9250_transaction transaction;
+
+  read_MPU9250_registers( I2C_address, register_address, &(transaction.value[1]), 1, bsc );
+
+  return transaction.field.data;
+}
+
+// WRITE REG
+void write_MPU9250_register(                                /* write a register */
+    uint8_t                               I2C_address,      /* the address of the I2C device to talk to */
+    MPU9250_REGISTER                      register_address, /* the address to read from */
+    union MPU9250_transaction_field_data  value,            /* the value to write */
+    volatile struct bsc_register *        bsc )             /* the BSC address */
+{
+  union MPU9250_transaction transaction;
+
+  transaction.field.data = value;
+  bsc->S.field.DONE    = 1;
+  bsc->A.field.ADDR    = I2C_address;
+  bsc->C.field.READ    = 0;
+  bsc->DLEN.field.DLEN = 2;
+  bsc->FIFO.value      = register_address;
+  bsc->FIFO.value      = transaction.value[1];
+  bsc->C.field.ST      = 1;
+  while (bsc->S.field.DONE == 0)
+  {
+    usleep( 100 );
+  }
+
+  return;
+}
+
+// CAL AG
+void calibrate_accelerometer_and_gyroscope(
+    struct calibration_data *     calibration_accelerometer,
+    struct calibration_data *     calibration_gyroscope,
+    volatile struct bsc_register *bsc )
+{
+  union MPU9250_transaction_field_data  transaction;
+  uint8_t                               data_block_fifo_count[2];
+  union uint16_to_2uint8                reconstructor;
+  uint16_t                              ii;
+  uint16_t                              packet_count;
+  int32_t                               gyro_bias_x;
+  int32_t                               gyro_bias_y;
+  int32_t                               gyro_bias_z;
+  int32_t                               accel_bias_x;
+  int32_t                               accel_bias_y;
+  int32_t                               accel_bias_z;
+  uint8_t                               data_block_fifo_packet[12];
+  union uint16_to_2uint8                reconstructor_accel_x;
+  union uint16_to_2uint8                reconstructor_accel_y;
+  union uint16_to_2uint8                reconstructor_accel_z;
+  union uint16_to_2uint8                reconstructor_gyro_x;
+  union uint16_to_2uint8                reconstructor_gyro_y;
+  union uint16_to_2uint8                reconstructor_gyro_z;
+
+  // reset device
+  transaction.PWR_MGMT_1.CLKSEL       = 0;
+  transaction.PWR_MGMT_1.PD_PTAT      = 0;
+  transaction.PWR_MGMT_1.GYRO_STANDBY = 0;
+  transaction.PWR_MGMT_1.CYCLE        = 0;
+  transaction.PWR_MGMT_1.SLEEP        = 0;
+  transaction.PWR_MGMT_1.H_RESET      = 1;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_PWR_MGMT_1, transaction, bsc );
+  usleep( 100000 );
+
+  // get stable time source; auto select clock source to be PLL gyroscope reference if ready
+  // else use the internal oscillator
+  transaction.PWR_MGMT_1.CLKSEL       = 1;
+  transaction.PWR_MGMT_1.PD_PTAT      = 0;
+  transaction.PWR_MGMT_1.GYRO_STANDBY = 0;
+  transaction.PWR_MGMT_1.CYCLE        = 0;
+  transaction.PWR_MGMT_1.SLEEP        = 0;
+  transaction.PWR_MGMT_1.H_RESET      = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_PWR_MGMT_1, transaction, bsc );
+  transaction.PWR_MGMT_2.DIS_ZG   = 0;
+  transaction.PWR_MGMT_2.DIS_YG   = 0;
+  transaction.PWR_MGMT_2.DIS_XG   = 0;
+  transaction.PWR_MGMT_2.DIS_ZA   = 0;
+  transaction.PWR_MGMT_2.DIS_YA   = 0;
+  transaction.PWR_MGMT_2.DIS_XA   = 0;
+  transaction.PWR_MGMT_2.reserved = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_PWR_MGMT_2, transaction, bsc );
+  usleep( 200000 );
+  
+   // configure device for bias calculation
+  transaction.INT_ENABLE.RAW_RDY_EN    = 0; // disable all interrupts
+  transaction.INT_ENABLE.reserved0     = 0;
+  transaction.INT_ENABLE.FSYNC_INT_EN  = 0;
+  transaction.INT_ENABLE.FIFO_OFLOW_EN = 0;
+  transaction.INT_ENABLE.reserved1     = 0;
+  transaction.INT_ENABLE.WOM_EN        = 0;
+  transaction.INT_ENABLE.reserved2     = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_INT_ENABLE, transaction, bsc );
+  transaction.FIFO_EN.SLV0         = 0; // disable FIFO
+  transaction.FIFO_EN.SLV1         = 0;
+  transaction.FIFO_EN.SLV2         = 0;
+  transaction.FIFO_EN.ACCEL        = 0;
+  transaction.FIFO_EN.GYRO_ZO_UT   = 0;
+  transaction.FIFO_EN.GYRO_YO_UT   = 0;
+  transaction.FIFO_EN.GYRO_XO_UT   = 0;
+  transaction.FIFO_EN.TEMP_FIFO_EN = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_FIFO_EN, transaction, bsc );
+  transaction.PWR_MGMT_1.CLKSEL       = 0;  // turn on internal clock source
+  transaction.PWR_MGMT_1.PD_PTAT      = 0;
+  transaction.PWR_MGMT_1.GYRO_STANDBY = 0;
+  transaction.PWR_MGMT_1.CYCLE        = 0;
+  transaction.PWR_MGMT_1.SLEEP        = 0;
+  transaction.PWR_MGMT_1.H_RESET      = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_PWR_MGMT_1, transaction, bsc );
+  transaction.I2C_MST_CTRL.I2C_MST_CLK   = 0; // disable I2C master
+  transaction.I2C_MST_CTRL.I2C_MST_P_NSR = 0;
+  transaction.I2C_MST_CTRL.SLV_3_FIFO_EN = 0;
+  transaction.I2C_MST_CTRL.WAIT_FOR_ES   = 0;
+  transaction.I2C_MST_CTRL.MULT_MST_EN   = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_I2C_MST_CTRL, transaction, bsc );
+  transaction.USER_CTRL.SIG_COND_RST = 0; // disable FIFO and I2C master modes
+  transaction.USER_CTRL.I2C_MST_RST  = 0;
+  transaction.USER_CTRL.FIFO_RST     = 0;
+  transaction.USER_CTRL.reserved0    = 0;
+  transaction.USER_CTRL.I2C_IF_DIS   = 0;
+  transaction.USER_CTRL.I2C_MST_EN   = 0;
+  transaction.USER_CTRL.FIFO_EN      = 0;
+  transaction.USER_CTRL.reserved1    = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_USER_CTRL, transaction, bsc );
+  transaction.USER_CTRL.SIG_COND_RST = 0; // reset FIFO and DMP
+  transaction.USER_CTRL.I2C_MST_RST  = 0;
+  transaction.USER_CTRL.FIFO_RST     = 1;
+  transaction.USER_CTRL.reserved0    = 0;
+  transaction.USER_CTRL.I2C_IF_DIS   = 0;
+  transaction.USER_CTRL.I2C_MST_EN   = 0;
+  transaction.USER_CTRL.FIFO_EN      = 0;
+  transaction.USER_CTRL.reserved1    = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_USER_CTRL, transaction, bsc );
+  usleep( 15000 );
+  
+    // configure MPU9250 gyro and accelerometer for bias calculation
+  transaction.CONFIG.DLPF_CFG     = 1;  // set low-pass filter to 188Hz
+  transaction.CONFIG.EXT_SYNC_SET = 0;
+  transaction.CONFIG.FIFO_MODE    = 0;
+  transaction.CONFIG.reserved     = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_CONFIG, transaction, bsc );
+  transaction.SMPLRT_DIV.SMPLRT_DIV = 0;  // set sample rate to 1kHz
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_SMPLRT_DIV, transaction, bsc );
+  transaction.GYRO_CONFIG.FCHOICE_B   = 0; // set gyro full-scale to 250dps, maximum sensitivity
+  transaction.GYRO_CONFIG.reserved    = 0;
+  transaction.GYRO_CONFIG.GYRO_FS_SEL = 0;
+  transaction.GYRO_CONFIG.ZGYRO_Cten  = 0;
+  transaction.GYRO_CONFIG.YGYRO_Cten  = 0;
+  transaction.GYRO_CONFIG.XGYRO_Cten  = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_GYRO_CONFIG, transaction, bsc );
+  transaction.ACCEL_CONFIG.reserved     = 0; // set accelerometer full-scale to 2g, maximum sensitivity
+  transaction.ACCEL_CONFIG.ACCEL_FS_SEL = 0;
+  transaction.ACCEL_CONFIG.az_st_en     = 0;
+  transaction.ACCEL_CONFIG.ay_st_en     = 0;
+  transaction.ACCEL_CONFIG.ax_st_en     = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_ACCEL_CONFIG, transaction, bsc );
+
+  calibration_accelerometer->scale = 2.0/32768.0;  // measurement scale/signed numeric range
+  calibration_accelerometer->offset_x = 0;
+  calibration_accelerometer->offset_y = 0;
+  calibration_accelerometer->offset_z = 0;
+
+  calibration_gyroscope->scale = 250.0/32768.0;
+  calibration_gyroscope->offset_x = 0;
+  calibration_gyroscope->offset_y = 0;
+  calibration_gyroscope->offset_z = 0;
+
+  // configure FIFO to capture accelerometer and gyro data for bias calculation
+  transaction.USER_CTRL.SIG_COND_RST = 0; // enable FIFO
+  transaction.USER_CTRL.I2C_MST_RST  = 0;
+  transaction.USER_CTRL.FIFO_RST     = 0;
+  transaction.USER_CTRL.reserved0    = 0;
+  transaction.USER_CTRL.I2C_IF_DIS   = 0;
+  transaction.USER_CTRL.I2C_MST_EN   = 0;
+  transaction.USER_CTRL.FIFO_EN      = 1;
+  transaction.USER_CTRL.reserved1    = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_USER_CTRL, transaction, bsc );
+  transaction.FIFO_EN.SLV0         = 0; // enable gyro and accelerometer sensors for FIFO (max size 512 bytes in MPU9250)
+  transaction.FIFO_EN.SLV1         = 0;
+  transaction.FIFO_EN.SLV2         = 0;
+  transaction.FIFO_EN.ACCEL        = 1;
+  transaction.FIFO_EN.GYRO_ZO_UT   = 1;
+  transaction.FIFO_EN.GYRO_YO_UT   = 1;
+  transaction.FIFO_EN.GYRO_XO_UT   = 1;
+  transaction.FIFO_EN.TEMP_FIFO_EN = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_FIFO_EN, transaction, bsc );
+  usleep( 40000 );  // accumulate 40 samples in 40 milliseconds = 480 bytes
+
+  // at end of sample accumulation, turn off FIFO sensor read
+  transaction.FIFO_EN.SLV0         = 0; // disable gyro and accelerometer sensors for FIFO
+  transaction.FIFO_EN.SLV1         = 0;
+  transaction.FIFO_EN.SLV2         = 0;
+  transaction.FIFO_EN.ACCEL        = 0;
+  transaction.FIFO_EN.GYRO_ZO_UT   = 0;
+  transaction.FIFO_EN.GYRO_YO_UT   = 0;
+  transaction.FIFO_EN.GYRO_XO_UT   = 0;
+  transaction.FIFO_EN.TEMP_FIFO_EN = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_FIFO_EN, transaction, bsc );
+  read_MPU9250_registers( MPU9250_ADDRESS, MPU9250_REGISTER_FIFO_COUNTH, data_block_fifo_count, sizeof(data_block_fifo_count), bsc ); // read FIFO sample count
+  reconstructor.field.H = data_block_fifo_count[0];
+  reconstructor.field.L = data_block_fifo_count[1];
+  packet_count = reconstructor.unsigned_value / 12; // how many sets of full gyro and accelerometer data for averaging
+
+  accel_bias_x = 0;
+  accel_bias_y = 0;
+  accel_bias_z = 0;
+  gyro_bias_x = 0;
+  gyro_bias_y = 0;
+  gyro_bias_z = 0;
+  for (ii = 0; ii < packet_count; ii++)
+  {
+    read_MPU9250_registers( MPU9250_ADDRESS, MPU9250_REGISTER_FIFO_R_W, data_block_fifo_packet, sizeof(data_block_fifo_packet), bsc ); // read data for averaging
+
+    reconstructor_accel_x.field.H = data_block_fifo_packet[0];
+    reconstructor_accel_x.field.L = data_block_fifo_packet[1];
+    reconstructor_accel_y.field.H = data_block_fifo_packet[2];
+    reconstructor_accel_y.field.L = data_block_fifo_packet[3];
+    reconstructor_accel_z.field.H = data_block_fifo_packet[4];
+    reconstructor_accel_z.field.L = data_block_fifo_packet[5];
+    reconstructor_gyro_x.field.H  = data_block_fifo_packet[6];
+    reconstructor_gyro_x.field.L  = data_block_fifo_packet[7];
+    reconstructor_gyro_y.field.H  = data_block_fifo_packet[8];
+    reconstructor_gyro_y.field.L  = data_block_fifo_packet[9];
+    reconstructor_gyro_z.field.H  = data_block_fifo_packet[10];
+    reconstructor_gyro_z.field.L  = data_block_fifo_packet[11];
+
+    accel_bias_x += reconstructor_accel_x.signed_value; // sum individual signed 16-bit biases to get accumulated signed 32-bit biases
+    accel_bias_y += reconstructor_accel_y.signed_value;
+    accel_bias_z += reconstructor_accel_z.signed_value;
+    gyro_bias_x  += reconstructor_gyro_x.signed_value;
+    gyro_bias_y  += reconstructor_gyro_y.signed_value;
+    gyro_bias_z  += reconstructor_gyro_z.signed_value;
+  }
+  accel_bias_x /= (int32_t)packet_count;
+  accel_bias_y /= (int32_t)packet_count;
+  accel_bias_z /= (int32_t)packet_count;
+  gyro_bias_x /= (int32_t)packet_count;
+  gyro_bias_y /= (int32_t)packet_count;
+  gyro_bias_z /= (int32_t)packet_count;
+  if (accel_bias_z > 0) // remove gravity from the z-axis accelerometer bias calculation
+  {
+    accel_bias_z -= (int32_t)(1.0/calibration_accelerometer->scale);
+  }
+  else
+  {
+    accel_bias_z += (int32_t)(1.0/calibration_accelerometer->scale);
+  }
+
+  // the code that this is based off of tried to push the bias calculation values to hardware correction registers
+  // these registers do not appear to be functioning, so rely on software offset correction
+
+  // output scaled gyro biases
+  calibration_gyroscope->offset_x = ((float)gyro_bias_x)*calibration_gyroscope->scale;
+  calibration_gyroscope->offset_y = ((float)gyro_bias_y)*calibration_gyroscope->scale;
+  calibration_gyroscope->offset_z = ((float)gyro_bias_z)*calibration_gyroscope->scale;
+
+  // output scaled accelerometer biases
+  calibration_accelerometer->offset_x = ((float)accel_bias_x)*calibration_accelerometer->scale;
+  calibration_accelerometer->offset_y = ((float)accel_bias_y)*calibration_accelerometer->scale;
+  calibration_accelerometer->offset_z = ((float)accel_bias_z)*calibration_accelerometer->scale;
+
+  return;
+}
+
+// INIT AG
+void initialize_accelerometer_and_gyroscope(
+    struct calibration_data *     calibration_accelerometer,
+    struct calibration_data *     calibration_gyroscope,
+    volatile struct bsc_register *bsc )
+{
+  union MPU9250_transaction_field_data  transaction;
+
+  /* print WHO_AM_I */
+  printf( "accel WHOAMI (0x71) = 0x%2.2X\n",
+      read_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_WHO_AM_I, bsc ).WHO_AM_I.WHOAMI );
+
+  // based off https://github.com/brianc118/MPU9250/blob/master/MPU9250.cpp
+
+  calibrate_accelerometer_and_gyroscope( calibration_accelerometer, calibration_gyroscope, bsc );
+
+  // reset MPU9205
+  transaction.PWR_MGMT_1.CLKSEL        = 0;
+  transaction.PWR_MGMT_1.PD_PTAT       = 0;
+  transaction.PWR_MGMT_1.GYRO_STANDBY  = 0;
+  transaction.PWR_MGMT_1.CYCLE         = 0;
+  transaction.PWR_MGMT_1.SLEEP         = 0;
+  transaction.PWR_MGMT_1.H_RESET       = 1;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_PWR_MGMT_1, transaction, bsc );
+  usleep( 1000 ); // wait for all registers to reset
+
+  // clock source
+  transaction.PWR_MGMT_1.CLKSEL       = 1;
+  transaction.PWR_MGMT_1.PD_PTAT      = 0;
+  transaction.PWR_MGMT_1.GYRO_STANDBY = 0;
+  transaction.PWR_MGMT_1.CYCLE        = 0;
+  transaction.PWR_MGMT_1.SLEEP        = 0;
+  transaction.PWR_MGMT_1.H_RESET      = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_PWR_MGMT_1, transaction, bsc );
+
+  // enable acc & gyro
+  transaction.PWR_MGMT_2.DIS_ZG   = 0;
+  transaction.PWR_MGMT_2.DIS_YG   = 0;
+  transaction.PWR_MGMT_2.DIS_XG   = 0;
+  transaction.PWR_MGMT_2.DIS_ZA   = 0;
+  transaction.PWR_MGMT_2.DIS_YA   = 0;
+  transaction.PWR_MGMT_2.DIS_XA   = 0;
+  transaction.PWR_MGMT_2.reserved = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_PWR_MGMT_1, transaction, bsc );
+
+  // use DLPF set gyro bandwidth 184Hz, temperature bandwidth 188Hz
+  transaction.CONFIG.DLPF_CFG     = 1;
+  transaction.CONFIG.EXT_SYNC_SET = 0;
+  transaction.CONFIG.FIFO_MODE    = 0;
+  transaction.CONFIG.reserved     = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_CONFIG, transaction, bsc );
+
+  // +-250dps
+  transaction.GYRO_CONFIG.FCHOICE_B   = 0;
+  transaction.GYRO_CONFIG.reserved    = 0;
+  transaction.GYRO_CONFIG.GYRO_FS_SEL = 0;
+  transaction.GYRO_CONFIG.ZGYRO_Cten  = 0;
+  transaction.GYRO_CONFIG.YGYRO_Cten  = 0;
+  transaction.GYRO_CONFIG.XGYRO_Cten  = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_GYRO_CONFIG, transaction, bsc );
+
+  // +-2G
+  transaction.ACCEL_CONFIG.reserved     = 0;
+  transaction.ACCEL_CONFIG.ACCEL_FS_SEL = 0;
+  transaction.ACCEL_CONFIG.az_st_en     = 0;
+  transaction.ACCEL_CONFIG.ay_st_en     = 0;
+  transaction.ACCEL_CONFIG.ax_st_en     = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_ACCEL_CONFIG, transaction, bsc );
+
+  // set acc data rates,enable acc LPF, bandwidth 184Hz
+  transaction.ACCEL_CONFIG_2.A_DLPF_CFG      = 0;
+  transaction.ACCEL_CONFIG_2.ACCEL_FCHOICE_B = 0;
+  transaction.ACCEL_CONFIG_2.reserved        = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_ACCEL_CONFIG_2, transaction, bsc );
+
+  // force into I2C mode, disabling I2C master
+  transaction.USER_CTRL.SIG_COND_RST = 0;
+  transaction.USER_CTRL.I2C_MST_RST  = 0;
+  transaction.USER_CTRL.FIFO_RST     = 0;
+  transaction.USER_CTRL.reserved0    = 0;
+  transaction.USER_CTRL.I2C_IF_DIS   = 0;
+  transaction.USER_CTRL.I2C_MST_EN   = 0;
+  transaction.USER_CTRL.FIFO_EN      = 0;
+  transaction.USER_CTRL.reserved1    = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_USER_CTRL, transaction, bsc );
+
+  // enable bypass mode
+  transaction.INT_PIN_CFG.reserved          = 0;
+  transaction.INT_PIN_CFG.BYPASS_EN         = 1;
+  transaction.INT_PIN_CFG.FSYNC_INT_MODE_EN = 0;
+  transaction.INT_PIN_CFG.ACTL_FSYNC        = 0;
+  transaction.INT_PIN_CFG.INT_ANYRD_2CLEAR  = 0;
+  transaction.INT_PIN_CFG.LATCH_INT_EN      = 0;
+  transaction.INT_PIN_CFG.OPEN              = 0;
+  transaction.INT_PIN_CFG.ACTL              = 0;
+  write_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_INT_PIN_CFG, transaction, bsc );
+
+  return;
+}
+
+// INIT M
+void initialize_magnetometer(
+    struct calibration_data *     calibration_magnetometer,
+    volatile struct bsc_register *bsc )
+{
+  union MPU9250_transaction_field_data  transaction;
+  uint8_t                               data_block[3];
+
+  // read WHOAMI from the magnetometer
+  transaction = read_MPU9250_register( AK8963_ADDRESS, AK8963_REGISTER_WIA, bsc );
+  printf( "mag   WHOAMI (0x48) = 0x%2.2X\n", transaction.WIA.WIA );
+
+  // reset AK8963
+  transaction.CNTL2.SRST      = 1;
+  transaction.CNTL2.reserved  = 0;
+  write_MPU9250_register( AK8963_ADDRESS, AK8963_REGISTER_CNTL2, transaction, bsc );
+  usleep( 1000 );
+
+  // I2C slave 0 register address from where to being data transfer
+  // register value to 100Hz continuous measurement in 14bit
+  transaction.CNTL1.MODE      = 6;
+  transaction.CNTL1.BIT       = 0;
+  transaction.CNTL1.reserved  = 0;
+  write_MPU9250_register( AK8963_ADDRESS, AK8963_REGISTER_CNTL1, transaction, bsc );
+  usleep( 1000 );
+
+  // get the magnetometer calibration... extracted from the "calib_mag" function at https://github.com/brianc118/MPU9250/blob/master/MPU9250.cpp
+  read_MPU9250_registers( AK8963_ADDRESS, AK8963_REGISTER_ASAX, data_block, sizeof(data_block), bsc );
+  calibration_magnetometer->scale = (float)1;
+  calibration_magnetometer->offset_x = ((((float)data_block[0])-128.0)/256.0+1.0);
+  calibration_magnetometer->offset_y = ((((float)data_block[1])-128.0)/256.0+1.0);
+  calibration_magnetometer->offset_z = ((((float)data_block[2])-128.0)/256.0+1.0);
+
+  return;
+}
+
+// READ AG
+void read_accelerometer_gyroscope(
+    struct calibration_data *     calibration_accelerometer,
+    struct calibration_data *     calibration_gyroscope,
+    volatile struct bsc_register *bsc )
+{
+  uint8_t                   data_block[6+2+6];
+  union uint16_to_2uint8    ACCEL_XOUT;
+  union uint16_to_2uint8    ACCEL_YOUT;
+  union uint16_to_2uint8    ACCEL_ZOUT;
+  union uint16_to_2uint8    GYRO_XOUT;
+  union uint16_to_2uint8    GYRO_YOUT;
+  union uint16_to_2uint8    GYRO_ZOUT;
+
+  /*
+   * poll the interrupt status register and it tells you when it is done
+   * once it is done, read the data registers
+   */
+  do
+  {
+    usleep( 1000 );
+  } while (read_MPU9250_register( MPU9250_ADDRESS, MPU9250_REGISTER_INT_STATUS, bsc ).INT_STATUS.RAW_DATA_RDY_INT == 0);
+
+  // read the accelerometer values
+  read_MPU9250_registers( MPU9250_ADDRESS, MPU9250_REGISTER_ACCEL_XOUT_H, data_block, sizeof(data_block), bsc );
+  ACCEL_XOUT.field.H  = data_block[0];
+  ACCEL_XOUT.field.L  = data_block[1];
+  ACCEL_YOUT.field.H  = data_block[2];
+  ACCEL_YOUT.field.L  = data_block[3];
+  ACCEL_ZOUT.field.H  = data_block[4];
+  ACCEL_ZOUT.field.L  = data_block[5];
+  // TEMP_OUT.field.H = data_block[6];
+  // TEMP_OUT.field.L = data_block[7];
+  GYRO_XOUT.field.H   = data_block[8];
+  GYRO_XOUT.field.L   = data_block[9];
+  GYRO_YOUT.field.H   = data_block[10];
+  GYRO_YOUT.field.L   = data_block[11];
+  GYRO_ZOUT.field.H   = data_block[12];
+  GYRO_ZOUT.field.L   = data_block[13];
+
+  printf( "Gyro X: %.2f deg\ty=%.2f deg\tz=%.2f deg\n",
+      GYRO_XOUT.signed_value*calibration_gyroscope->scale - calibration_gyroscope->offset_x,
+      GYRO_YOUT.signed_value*calibration_gyroscope->scale - calibration_gyroscope->offset_y,
+      GYRO_ZOUT.signed_value*calibration_gyroscope->scale - calibration_gyroscope->offset_z );
+
+  printf( "Accel X: %.2f m/s^2\ty=%.2f m/s^2\tz=%.2f m/s^2\n",
+      (ACCEL_XOUT.signed_value*calibration_accelerometer->scale - calibration_accelerometer->offset_x)*9.81,
+      (ACCEL_YOUT.signed_value*calibration_accelerometer->scale - calibration_accelerometer->offset_y)*9.81,
+      (ACCEL_ZOUT.signed_value*calibration_accelerometer->scale - calibration_accelerometer->offset_z)*9.81 );
+
+  return;
+}
+
+// READ M
+void read_magnetometer(
+    struct calibration_data *     calibration_magnetometer,
+    volatile struct bsc_register *bsc )
+{
+  uint8_t                               data_block[7];
+  union uint16_to_2uint8                MAG_XOUT;
+  union uint16_to_2uint8                MAG_YOUT;
+  union uint16_to_2uint8                MAG_ZOUT;
+  union MPU9250_transaction_field_data  transaction;
+
+  read_MPU9250_registers( AK8963_ADDRESS, AK8963_REGISTER_HXL, data_block, 7, bsc );
+  // read must start from HXL and read seven bytes so that ST2 is read and the AK8963 will start the next conversion
+  MAG_XOUT.field.L = data_block[0];
+  MAG_XOUT.field.H = data_block[1];
+  MAG_YOUT.field.L = data_block[2];
+  MAG_YOUT.field.H = data_block[3];
+  MAG_ZOUT.field.L = data_block[4];
+  MAG_ZOUT.field.H = data_block[5];
+  printf( "Mag X: %.2f uT\ty=%.2f uT\tz=%.2f uT\n",
+      MAG_XOUT.signed_value*calibration_magnetometer->offset_x,
+      MAG_YOUT.signed_value*calibration_magnetometer->offset_y,
+      MAG_ZOUT.signed_value*calibration_magnetometer->offset_z );
+
+  return;
+}
+
+void *ImuThread(void  *arg)
+{
+  struct  imu_thread_param * param = (struct imu_thread_param *)arg;
+  struct  thread_command cmd2 = {0, 0};
+  struct  thread_command cmd1 = {0, 0};
+  struct  timespec  timer_state;
+             // used to wake up every 10ms with wait_period() function,
+             // similar to interrupt occuring every 10ms
+
+  // start 10ms timed wait
+  wait_period_initialize( &timer_state );
+  param->io->gpio->GPFSEL0.field.FSEL2 = GPFSEL_ALTERNATE_FUNCTION0;
+  param->io->gpio->GPFSEL0.field.FSEL3 = GPFSEL_ALTERNATE_FUNCTION0;
+  initialize_accelerometer_and_gyroscope( param->calibration_accelerometer, param->calibration_gyroscope, param->io->bsc );
+  initialize_magnetometer( param->calibration_magnetometer, param->io->bsc );
+  param->io->bsc->DIV.field.CDIV  = (PERIPHERAL_CLOCK*10)/400000;
+  param->io->bsc->DEL.field.REDL  = 0x30;
+  param->io->bsc->DEL.field.FEDL  = 0x30;
+  param->io->bsc->CLKT.field.TOUT = 0x40;
+  param->io->bsc->C.field.INTD    = 0;
+  param->io->bsc->C.field.INTT    = 0;
+  param->io->bsc->C.field.INTR    = 0;
+  param->io->bsc->C.field.I2CEN   = 1;
+  param->io->bsc->C.field.CLEAR   = 1;
+  while (!*(param->quit_flag))
+  {
+    read_accelerometer_gyroscope( param->calibration_accelerometer, param->calibration_gyroscope, param->io->bsc );
+    read_magnetometer( param->calibration_magnetometer, param->io->bsc );
+    printf( "\n" );
+    wait_period( &timer_state, 10u );
+  }
+
+  printf( "%s function done\n", param->name );
+
+  return NULL;
+}
+
 
 int main( int argc, char * argv[] )
 {
   struct io_peripherals *io;
   struct video_interface_handle_t * handle;
-  //struct calibration_data calibration_accelerometer;
-  //struct calibration_data calibration_gyroscope;
-  //struct calibration_data calibration_magnetometer;
+  struct calibration_data calibration_accelerometer;
+  struct calibration_data calibration_gyroscope;
+  struct calibration_data calibration_magnetometer;
   
   //Create 5 threads 2 for the motors one for the speed, one for keys and one for control. All except key need their respective fifos, and thread paramaters
   pthread_t tMotor1;
@@ -2011,6 +2545,7 @@ int main( int argc, char * argv[] )
   pthread_t tLaser;
   pthread_t tDisplay;
   pthread_t tShapes;
+  pthread_t tImu;
   struct fifo_t key_fifo   = {{}, 0, 0, PTHREAD_MUTEX_INITIALIZER};
   struct fifo_t motor1Fifo    = {{}, 0, 0, PTHREAD_MUTEX_INITIALIZER};
   struct fifo_t motor2Fifo    = {{}, 0, 0, PTHREAD_MUTEX_INITIALIZER};
@@ -2038,6 +2573,7 @@ int main( int argc, char * argv[] )
   struct camera_thread_param cameraParam = {handle, scaled_data, scaled_RGB_data, scaled_height, scaled_width, &quit_flag, argc, argv, handle_GUI_color};
   struct laser_thread_param laserParam = {"laser", &motor1Fifo, &motor2Fifo, &pwmFifo, &quit_flag, NULL, scaled_RGB_data, scaled_height, scaled_width};
   struct shapes_thread_param shapeParam = {"shapes",&shapesFifo, &motor1Fifo, &motor2Fifo, &pwmFifo, &quit_flag};
+  struct imu_thread_param imuParam = {"imu", NULL , &calibration_accelerometer ,&calibration_gyroscope ,&calibration_magnetometer};
   
   if (io != NULL)
   {
@@ -2052,9 +2588,9 @@ int main( int argc, char * argv[] )
     motor2Param.gpio = io->gpio;
     pwmParam.gpio = io->gpio;
    
-   
+    printf("\n----------------------\n");
     printf("\n\n\n Welcome!\n\n w: forward\n s: stop\n x:backward\n a: left \n d: right \n o: increase degrees \n k: decrease degrees \n \n i: power up 5%\n j: power down 5%\nc: color image\nv: gray image\nb: black white image\nn: shrink image (black white)\n\n\n");
-
+    printf("\n----------------------\n");
     // Create three threads our threase and then join them once the q command is hit
     pthread_create(&tMotor1, NULL, Motor1Thread, (void *)&motor1Param);
     pthread_create(&tMotor2, NULL, Motor2Thread, (void *)&motor2Param);
@@ -2065,6 +2601,7 @@ int main( int argc, char * argv[] )
     pthread_create(&tDisplay, NULL, DisplayThread, (void *)&cameraParam);
     pthread_create(&tLaser, NULL, LaserThread, (void *)&laserParam);
     pthread_create(&tShapes, NULL, ShapesThread, (void *)&shapeParam);
+    pthread_create(&tImu, NULL, ImuThread, (void *)&imuParam);
     // Join threads
     pthread_join(tMotor1, NULL);
     pthread_join(tMotor2, NULL);
@@ -2075,6 +2612,7 @@ int main( int argc, char * argv[] )
     pthread_join(tDisplay, NULL);
     pthread_join(tLaser, NULL);
     pthread_join(tShapes, NULL);
+    pthread_join(tImu, NULL);
    
     free(scaled_data);
     video_interface_close(handle);
