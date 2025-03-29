@@ -113,7 +113,7 @@ typedef uint8_t AK8963_REGISTER;
 #define MPU9250_REGISTER_YA_OFFSET_L          ((MPU9250_REGISTER)0x7B)
 #define MPU9250_REGISTER_ZA_OFFSET_H          ((MPU9250_REGISTER)0x7D)
 #define MPU9250_REGISTER_ZA_OFFSET_L          ((MPU9250_REGISTER)0x7E)
-
+#define MPU9250_ADDRESS                       0x68
 #define AK8963_ADDRESS                        0x0C
 
 #define AK8963_REGISTER_WIA                   ((AK8963_REGISTER)0x00)

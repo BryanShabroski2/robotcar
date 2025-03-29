@@ -16,7 +16,8 @@ OBJECTS = $(patsubst %.cpp,%.o,$(patsubst %.c,%.o,$(SOURCES)))
 CFLAGS = `pkg-config --cflags --libs gtk+-2.0` \
          -Wall \
          -Wno-deprecated-declarations \
-         -g
+         -g \
+
 
 all: $(TARGET)
 

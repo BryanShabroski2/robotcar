@@ -45,6 +45,8 @@
 #include "wait_key.h"
 #include "scale_image_data.h"
 #include "draw_bitmap_multiwindow.h"
+#include <math.h>
+
 
 #define GET_FRAMES                5  /* the number of frame times to average when determining the FPS */
 #define FIFO_LENGTH     1024
@@ -53,6 +55,28 @@
 
 #define ROUND_DIVISION(x,y) (((x) + (y)/2)/(y))
 
+
+#define MAX_SAMPLES 320
+
+float g_accX[MAX_SAMPLES];
+float g_accY[MAX_SAMPLES];
+float g_accZ[MAX_SAMPLES];
+float g_gyrX[MAX_SAMPLES];
+float g_gyrY[MAX_SAMPLES];
+float g_gyrZ[MAX_SAMPLES];
+
+int g_accX_idx = 0;
+int g_accY_idx = 0;
+int g_accZ_idx = 0;
+int g_gyrX_idx = 0;
+int g_gyrY_idx = 0;
+int g_gyrZ_idx = 0;
+
+static float vx = 0.0f;
+static float vy = 0.0f;
+static float g_speed2d = 0.0f;
+static float g_distance2d = 0.0f;
+static float g_angle = 0.0f;
 
 union uint16_to_2uint8
 {
@@ -98,37 +122,54 @@ volatile bool mode2 = false;
 volatile bool mode3 = false;
 volatile bool lineTracing = false;
 int speed = 50;
-pthread_mutex_t speedMutex = PTHREAD_MUTEX_INITIALIZER;
+//pthread_mutex_t speedMutex = PTHREAD_MUTEX_INITIALIZER;
 volatile unsigned int angle = 30;
-struct draw_bitmap_multiwindow_handle_t *handle_GUI_color = NULL;
-struct draw_bitmap_multiwindow_handle_t *handle_GUI_gray = NULL;
-struct draw_bitmap_multiwindow_handle_t *handle_GUI_black_white = NULL;
-struct draw_bitmap_multiwindow_handle_t *handle_GUI_shrinked = NULL;
+//struct draw_bitmap_multiwindow_handle_t *handle_GUI_color = NULL;
+//struct draw_bitmap_multiwindow_handle_t *handle_GUI_gray = NULL;
+//struct draw_bitmap_multiwindow_handle_t *handle_GUI_black_white = NULL;
+//struct draw_bitmap_multiwindow_handle_t *handle_GUI_shrinked = NULL;
+struct draw_bitmap_multiwindow_handle_t *accX = NULL;
+struct draw_bitmap_multiwindow_handle_t *accY = NULL;
+struct draw_bitmap_multiwindow_handle_t *accZ = NULL;
+struct draw_bitmap_multiwindow_handle_t *gyrX = NULL;
+struct draw_bitmap_multiwindow_handle_t *gyrY = NULL;
+struct draw_bitmap_multiwindow_handle_t *gyrZ = NULL;
+
 volatile bool showColor = false;
 volatile bool showGray = false;
 volatile bool showBlackWhite = false;
 volatile bool showShrinked = false;
+volatile bool collectImu = false;
+volatile bool showAccX = false;
+volatile bool showAccY = false;
+volatile bool showAccZ = false;
+volatile bool showGyrX = false;
+volatile bool showGyrY = false;
+volatile bool showGyrZ = false;
+
 
 #define SHRUNK_W 64
 #define SHRUNK_H 48
+#define ACC_MAX 10.0f
+#define GYR_MAX 250.0f
 
-static struct pixel_format_RGB g_shrunk_data[SHRUNK_W* SHRUNK_H];
-static pthread_mutex_t g_shrunk_data_lock = PTHREAD_MUTEX_INITIALIZER;
-static struct pixel_format_RGB g_shrunk_data2[SHRUNK_W * SHRUNK_H];
-static pthread_mutex_t g_shrunk_data_lock2 = PTHREAD_MUTEX_INITIALIZER;
-struct pixel_format_RGB *master_buffer;
+//static struct pixel_format_RGB g_shrunk_data[SHRUNK_W* SHRUNK_H];
+//static pthread_mutex_t g_shrunk_data_lock = PTHREAD_MUTEX_INITIALIZER;
+//static struct pixel_format_RGB g_shrunk_data2[SHRUNK_W * SHRUNK_H];
+//static pthread_mutex_t g_shrunk_data_lock2 = PTHREAD_MUTEX_INITIALIZER;
+//struct pixel_format_RGB *master_buffer;
 
 
 unsigned int global_scaled_width = 0;
 unsigned int global_scaled_height = 0;
 struct pixel_format_RGB *g_scaled_bw_data = NULL;
 
-pthread_mutex_t g_scaled_bw_data_lock = PTHREAD_MUTEX_INITIALIZER;
+//pthread_mutex_t g_scaled_bw_data_lock = PTHREAD_MUTEX_INITIALIZER;
 
 
 int laserPointX = -1;
 int laserPointY = -1;
-pthread_mutex_t laserPointMutex = PTHREAD_MUTEX_INITIALIZER;
+//pthread_mutex_t laserPointMutex = PTHREAD_MUTEX_INITIALIZER;
 
 struct thread_command
 {
@@ -178,6 +219,7 @@ struct control_thread_param
   struct fifo_t                 * motor2Fifo;
   struct fifo_t                 * pwmFifo;
   struct fifo_t                 * shapesFifo;
+  struct fifo_t                 * imuFifo;
   bool                          * quit_flag;
 };
 
@@ -204,6 +246,7 @@ struct laser_thread_param
     struct pixel_format_RGB       * scaled_RGB_data;
     unsigned int                    scaled_width;
     unsigned int                    scaled_height;
+    
 };
 
 
@@ -235,10 +278,19 @@ struct imu_thread_param
 {
   const char                    * name;
   struct io_peripherals         * io;
+  volatile struct gpio_register * gpio;
+  struct fifo_t                 * imuFifo;
   struct calibration_data       * calibration_accelerometer;
   struct calibration_data       * calibration_gyroscope;
   struct calibration_data       * calibration_magnetometer;
   bool                          * quit_flag;
+  unsigned int scaled_height;
+  unsigned int scaled_width;
+  int argc;
+  char **argv;
+  struct video_interface_handle_t * video_handle;
+  unsigned char *scaled_data;
+  struct pixel_format_RGB *scaled_RGB_data;
 };
 
 #define SCALE_REDUCTION_PER_AXIS 2
@@ -328,13 +380,9 @@ void *Control(void * arg)
 
             if (mode2)
             {
+              if(modeSwitchFlag){
                 switch (cmd1.command)
                 {
-                    case 'm':
-                    {
-                    modeSwitchFlag = true;
-                  }
-                    break;
 
                   case '1':
                   {
@@ -362,36 +410,100 @@ void *Control(void * arg)
                       modeSwitchFlag = false;
                       }
                     }
-                      break;
+                     break;
+                  }
+                }
+                else{
+                  switch (cmd1.command)
+                  {
+                    
+                  case 'm':
+                    {
+                    modeSwitchFlag = true;
+                  }
+                    break;  
                   
-                    case 'c':
-                    {
-                        showColor = !showColor;
+                    case '1':
+                  {
+                      showAccX = !showAccX;
                     }
-                    break;
-
-                    case 'v':
-                    {
-                        showGray = !showGray;
+                      break;
+                  case '2':
+                  {
+                      showAccY = !showAccY;
                     }
-                    break;
-
-                    case 'b':
-                    {
-                          showBlackWhite = !showBlackWhite;
+                      break;
+                  case '3':
+                  {
+                      showAccY = !showAccY;
                     }
-                    break;
-
-                    case 'n':
-                    {
-                          showShrinked = !showShrinked;
+                      break;
+                  case '4':
+                  {
+                      showGyrX = !showGyrX;
                     }
-                    break;
+                      break;
+                  case '5':
+                  {
+                      showGyrY = !showGyrY;
+                    }
+                      break;
+                  case '6':
+                  {
+                     showGyrZ = !showGyrZ ;
+                    }
+                      break;
+                  case '7':
+                  {
+                      cmd2.command = '7';
+                      if(!(FIFO_FULL(param->imuFifo)))
+                      {
+                        FIFO_INSERT(param->imuFifo, cmd2);
+                        }
+                    }
+                      break;
+                      case '8':
+                  {
+                      cmd2.command = '8';
+                      if(!(FIFO_FULL(param->imuFifo)))
+                      {
+                        FIFO_INSERT(param->imuFifo, cmd2);
+                        }
+                    }
+                      break;
+                  case '9':
+                  {
+                      cmd2.command = '9';
+                      if(!(FIFO_FULL(param->imuFifo)))
+                      {
+                        FIFO_INSERT(param->imuFifo, cmd2);
+                        }
+                    }
+                      break;
+                      case 'e':
+                  {
+                      cmd2.command = 'e';
+                      if(!(FIFO_FULL(param->imuFifo)))
+                      {
+                        FIFO_INSERT(param->imuFifo, cmd2);
+                        }
+                    }
+                      break;
+                         case 'r':
+                  {
+                      cmd2.command = 'e';
+                      if(!(FIFO_FULL(param->imuFifo)))
+                      {
+                        FIFO_INSERT(param->imuFifo, cmd2);
+                        }
+                    }
+                      break;
                   
                     case 's':     // stop engines
                     {
                       if(!stop)
                       {
+                        collectImu = false;
                         printf("Stop!\n");
                         stop = true;
                         backward = false;
@@ -413,6 +525,7 @@ void *Control(void * arg)
                     {
                       if(!forward)
                       {
+                        collectImu = true;
                         printf("Going forwards!\n");
                         backward = false;
                         left = false;
@@ -658,17 +771,13 @@ void *Control(void * arg)
                     break;
 
                   }
+                }
             }
             else if(mode3)
             {
+              if(modeSwitchFlag){
               switch (cmd1.command)
               {
-                  case 'm':
-                  {
-                      modeSwitchFlag = true;
-                    }
-                      break;
-
                   case '1':
                   {
                       if (modeSwitchFlag)
@@ -698,7 +807,16 @@ void *Control(void * arg)
                     }
                   }
                       break;
-                   
+                  }
+                }else{
+                  switch (cmd1.command)
+                  {   
+                   case 'm':
+                  {
+                      modeSwitchFlag = true;
+                    }
+                      break;
+
                   case 'i':     // 'i' increase pwm by 5
                   {
                       cmd2.command = '+'; //+ for +5
@@ -720,9 +838,9 @@ void *Control(void * arg)
                   }
                   break;
                   //Square
-                  case 'w':
+                  case 'u':
                   {
-                      cmd2.command = 'S';
+                      cmd2.command = 'u';
                       if(!(FIFO_FULL(param->shapesFifo)))
                       {
                         FIFO_INSERT(param->shapesFifo, cmd2);
@@ -730,12 +848,88 @@ void *Control(void * arg)
                     }
                       break;
                   //Triangle
-                  case 'u':
+                  case 'h':
                   {
-                      cmd2.command = 't';
+                      cmd2.command = 'h';
                       if(!(FIFO_FULL(param->shapesFifo)))
                       {
                         FIFO_INSERT(param->shapesFifo, cmd2);
+                        }
+                    }
+                      break;
+                      
+                  case '1':
+                  {
+                      showAccX = !showAccX;
+                    }
+                      break;
+                  case '2':
+                  {
+                      showAccY = !showAccY;
+                    }
+                      break;
+                  case '3':
+                  {
+                      showAccY = !showAccY;
+                    }
+                      break;
+                  case '4':
+                  {
+                      showGyrX = !showGyrX;
+                    }
+                      break;
+                  case '5':
+                  {
+                      showGyrY = !showGyrY;
+                    }
+                      break;
+                  case '6':
+                  {
+                     showGyrZ = !showGyrZ ;
+                    }
+                      break;
+                  case '7':
+                  {
+                      cmd2.command = '7';
+                      if(!(FIFO_FULL(param->imuFifo)))
+                      {
+                        FIFO_INSERT(param->imuFifo, cmd2);
+                        }
+                    }
+                      break;
+                      case '8':
+                  {
+                      cmd2.command = '8';
+                      if(!(FIFO_FULL(param->imuFifo)))
+                      {
+                        FIFO_INSERT(param->imuFifo, cmd2);
+                        }
+                    }
+                      break;
+                  case '9':
+                  {
+                      cmd2.command = '9';
+                      if(!(FIFO_FULL(param->imuFifo)))
+                      {
+                        FIFO_INSERT(param->imuFifo, cmd2);
+                        }
+                    }
+                      break;
+                      case 'e':
+                  {
+                      cmd2.command = 'e';
+                      if(!(FIFO_FULL(param->imuFifo)))
+                      {
+                        FIFO_INSERT(param->imuFifo, cmd2);
+                        }
+                    }
+                      break;
+                         case 'r':
+                  {
+                      cmd2.command = 'e';
+                      if(!(FIFO_FULL(param->imuFifo)))
+                      {
+                        FIFO_INSERT(param->imuFifo, cmd2);
                         }
                     }
                       break;
@@ -757,18 +951,15 @@ void *Control(void * arg)
                     }
                       break;
               }
-
+              }
 
             }
             else{
+              if(modeSwitchFlag){
                   switch (cmd1.command)
               {
-                  case 'm':
-                  {
-                      modeSwitchFlag = true;
-                    }
-                      break;
-
+                  
+                
                   case '2':
                   {
                       if (modeSwitchFlag)
@@ -798,6 +989,16 @@ void *Control(void * arg)
                     }
                   }
                       break;
+                 }
+               }else{
+                    switch (cmd1.command)
+                    {   
+                   
+                   case 'm':
+                  {
+                      modeSwitchFlag = true;
+                    }
+                      break;
                    
                   case 'i':     // 'i' increase pwm by 5
                   {
@@ -819,28 +1020,93 @@ void *Control(void * arg)
                     else {printf( "pwm fifo queue full\n" );}
                   }
                   break;
-                  //Square
                   case 'w':
-                  {
-                      cmd2.command = 'S';
-                      if(!(FIFO_FULL(param->shapesFifo)))
-                      {
-                        FIFO_INSERT(param->shapesFifo, cmd2);
-                        }
+                  {   collectImu = true;
                     }
                       break;
-                  //Triangle
-                  case 'u':
+                  case 's':
                   {
-                      cmd2.command = 't';
-                      if(!(FIFO_FULL(param->shapesFifo)))
-                      {
-                        FIFO_INSERT(param->shapesFifo, cmd2);
-                        }
+                      collectImu = false;
                     }
                       break;
                    
-
+                  case '1':
+                  {
+                      showAccX = !showAccX;
+                    }
+                      break;
+                  case '2':
+                  {
+                      showAccY = !showAccY;
+                    }
+                      break;
+                  case '3':
+                  {
+                      showAccY = !showAccY;
+                    }
+                      break;
+                  case '4':
+                  {
+                      showGyrX = !showGyrX;
+                    }
+                      break;
+                  case '5':
+                  {
+                      showGyrY = !showGyrY;
+                    }
+                      break;
+                  case '6':
+                  {
+                     showGyrZ = !showGyrZ;
+                    }
+                      break;
+                  case '7':
+                  {
+                      cmd2.command = '7';
+                      if(!(FIFO_FULL(param->imuFifo)))
+                      {
+                        FIFO_INSERT(param->imuFifo, cmd2);
+                        }
+                    }
+                      break;
+                      case '8':
+                  {
+                      cmd2.command = '8';
+                      if(!(FIFO_FULL(param->imuFifo)))
+                      {
+                        FIFO_INSERT(param->imuFifo, cmd2);
+                        }
+                    }
+                      break;
+                  case '9':
+                  {
+                      cmd2.command = '9';
+                      if(!(FIFO_FULL(param->imuFifo)))
+                      {
+                        FIFO_INSERT(param->imuFifo, cmd2);
+                        }
+                    }
+                      break;
+                      case 'e':
+                  {
+                      cmd2.command = 'e';
+                      if(!(FIFO_FULL(param->imuFifo)))
+                      {
+                        FIFO_INSERT(param->imuFifo, cmd2);
+                        }
+                    }
+                      break;
+                         case 'r':
+                  {
+                      cmd2.command = 'e';
+                      if(!(FIFO_FULL(param->imuFifo)))
+                      {
+                        FIFO_INSERT(param->imuFifo, cmd2);
+                        }
+                    }
+                      break;
+                  
+                    
                   case 113:
                   {
                       cmd2.command = 113;
@@ -857,7 +1123,7 @@ void *Control(void * arg)
                     }
                       break;
               }
-
+            }
 
             }
                 }
@@ -1876,7 +2142,7 @@ void *ShapesThread(void *arg)
         FIFO_REMOVE( param->shapesFifo, &cmd2 );
         switch (cmd2.command)
         {
-          case 'S':  //Make car go in square motion (forward, left 90 deg, forward, left 90 deg...)
+          case 'u':  //Make car go in square motion (forward, left 90 deg, forward, left 90 deg...)
           {
             printf("Square mode activated\n");
             for(int squareCount = 1; squareCount < 5; squareCount++)
@@ -1900,10 +2166,11 @@ void *ShapesThread(void *arg)
             FIFO_INSERT( param->motor1Fifo, cmd1 );
             FIFO_INSERT( param->motor2Fifo, cmd1 );
             }
+            collectImu = false;
           }
           break;
-         
-          case 't':
+          //Make car go in triangle pattern. (forward, 120 degree turn repeat 3 times.)
+          case 'h':
           {
             printf("Triangle mode activated");
             for(int triangleCount = 1; triangleCount < 4; triangleCount++)
@@ -1928,6 +2195,7 @@ void *ShapesThread(void *arg)
             FIFO_INSERT( param->motor1Fifo, cmd1 );
             FIFO_INSERT( param->motor2Fifo, cmd1 );
             }
+            collectImu = false;
           }
           break;
 
@@ -2449,18 +2717,45 @@ void read_accelerometer_gyroscope(
   GYRO_ZOUT.field.H   = data_block[12];
   GYRO_ZOUT.field.L   = data_block[13];
 
+
+    float gyro_x_deg  = GYRO_XOUT.signed_value*calibration_gyroscope->scale - calibration_gyroscope->offset_x;
+    float gyro_y_deg  = GYRO_YOUT.signed_value*calibration_gyroscope->scale - calibration_gyroscope->offset_y;
+    float gyro_z_deg  = GYRO_ZOUT.signed_value*calibration_gyroscope->scale - calibration_gyroscope->offset_z;
+    
+    
+    float accel_x_ms2 = (ACCEL_XOUT.signed_value*calibration_accelerometer->scale - calibration_accelerometer->offset_x)*9.81f;
+    float accel_y_ms2 = (ACCEL_YOUT.signed_value*calibration_accelerometer->scale - calibration_accelerometer->offset_y)*9.81f;
+    float accel_z_ms2 = (ACCEL_ZOUT.signed_value*calibration_accelerometer->scale - calibration_accelerometer->offset_z)*9.81f;
+    
+    g_accX[g_accX_idx] = accel_x_ms2;
+    g_accY[g_accY_idx] = accel_y_ms2;
+    g_accZ[g_accZ_idx] = accel_z_ms2;
+
+    g_gyrX[g_gyrX_idx] = gyro_x_deg;
+    g_gyrY[g_gyrY_idx] = gyro_y_deg;
+    g_gyrZ[g_gyrZ_idx] = gyro_z_deg;
+
+    g_accX_idx = (g_accX_idx + 1) % MAX_SAMPLES;
+    g_accY_idx = (g_accY_idx + 1) % MAX_SAMPLES;
+    g_accZ_idx = (g_accZ_idx + 1) % MAX_SAMPLES;
+
+    g_gyrX_idx = (g_gyrX_idx + 1) % MAX_SAMPLES;
+    g_gyrY_idx = (g_gyrY_idx + 1) % MAX_SAMPLES;
+    g_gyrZ_idx = (g_gyrZ_idx + 1) % MAX_SAMPLES;
+    
   printf( "Gyro X: %.2f deg\ty=%.2f deg\tz=%.2f deg\n",
-      GYRO_XOUT.signed_value*calibration_gyroscope->scale - calibration_gyroscope->offset_x,
-      GYRO_YOUT.signed_value*calibration_gyroscope->scale - calibration_gyroscope->offset_y,
-      GYRO_ZOUT.signed_value*calibration_gyroscope->scale - calibration_gyroscope->offset_z );
+      gyro_x_deg,
+      gyro_y_deg,
+      gyro_z_deg );
 
   printf( "Accel X: %.2f m/s^2\ty=%.2f m/s^2\tz=%.2f m/s^2\n",
-      (ACCEL_XOUT.signed_value*calibration_accelerometer->scale - calibration_accelerometer->offset_x)*9.81,
-      (ACCEL_YOUT.signed_value*calibration_accelerometer->scale - calibration_accelerometer->offset_y)*9.81,
-      (ACCEL_ZOUT.signed_value*calibration_accelerometer->scale - calibration_accelerometer->offset_z)*9.81 );
+      accel_x_ms2,
+      accel_y_ms2,
+      accel_z_ms2);
 
   return;
 }
+
 
 // READ M
 void read_magnetometer(
@@ -2489,6 +2784,179 @@ void read_magnetometer(
   return;
 }
 
+int scale_to_pixel(float sensor_value, float sensor_max)
+{
+    float normalized = sensor_value / sensor_max;
+
+    if (normalized > 1.0f)  normalized = 1.0f;
+    if (normalized < -1.0f) normalized = -1.0f;
+
+    int y_pixel = (int)(120 - normalized * 120);
+
+    if (y_pixel < 0) y_pixel = 0;
+    if (y_pixel >= 240) y_pixel = 239;
+
+    return y_pixel;
+}
+
+void save_raw_data_to_file(void)
+{
+    // Open file in append mode
+    FILE *fp = fopen("hw9m1data.txt", "a");
+    if (!fp) {
+        perror("Error opening hw9m1data.txt");
+        return;
+    }
+
+    // Get the current time
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    double t = ts.tv_sec + (ts.tv_nsec / 1e9);
+
+    // The most recent sample index for accelerometer, gyro
+    int idxAcc = (g_accX_idx - 1 + MAX_SAMPLES) % MAX_SAMPLES;
+    int idxGyr = (g_gyrX_idx - 1 + MAX_SAMPLES) % MAX_SAMPLES;
+
+    // Retrieve data
+    float ax = g_accX[idxAcc];
+    float ay = g_accY[idxAcc];
+    float az = g_accZ[idxAcc];
+    float gx = g_gyrX[idxGyr];
+    float gy = g_gyrY[idxGyr];
+    float gz = g_gyrZ[idxGyr];
+
+    // Print in one line, same format as operation 1
+    fprintf(fp, "%.3f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\n",
+            t, ax, ay, az, gx, gy, gz);
+
+    fclose(fp);
+}
+
+void get_average_acc_25(float *avgAccX, float *avgAccY)
+{
+    float sumX = 0.0f, sumY = 0.0f;
+    for (int i = 0; i < 25; i++) {
+        int idxX = (g_accX_idx - 25 + i + MAX_SAMPLES) % MAX_SAMPLES;
+        int idxY = (g_accY_idx - 25 + i + MAX_SAMPLES) % MAX_SAMPLES;
+        sumX += g_accX[idxX];
+        sumY += g_accY[idxY];
+    }
+    *avgAccX = sumX / 25.0f;
+    *avgAccY = sumY / 25.0f;
+}
+
+void update_speed_2d(void)
+{
+    float avgAccX, avgAccY;
+    get_average_acc_25(&avgAccX, &avgAccY);
+
+    // dt = 0.25 seconds (4 updates per second)
+    float dt = 0.25f;
+
+    // Integrate acceleration to update velocity components
+    vx += avgAccX * dt;
+    vy += avgAccY * dt;
+
+    // Compute scalar speed from the velocity vector
+    g_speed2d = sqrtf(vx * vx + vy * vy);
+
+    // Print current speed
+    printf("Speed (2D): %.2f m/s\n", g_speed2d);
+}
+
+void update_distance_2d(void)
+{
+    // dt = 0.25 seconds
+    float dt = 0.25f;
+    g_distance2d += g_speed2d * dt;
+
+    // Print total distance traveled
+    printf("Distance: %.2f m\n", g_distance2d);
+}
+
+
+float get_average_gyrZ_25(void)
+{
+    float sum = 0.0f;
+    for (int i = 0; i < 25; i++) {
+        int idx = (g_gyrZ_idx - 25 + i + MAX_SAMPLES) % MAX_SAMPLES;
+        sum += g_gyrZ[idx];
+    }
+    return sum / 25.0f;
+}
+
+void update_angle(void)
+{
+    float avgGz = get_average_gyrZ_25();
+    float dt = 0.25f;  // 250 ms update interval
+    
+    // Integrate gyroZ to update angle (deg)
+    g_angle += avgGz * dt;
+    
+    printf("Angle: %.2f deg\n", g_angle);
+}
+
+void update_traced_map_text(void)
+{
+
+    float dt = 0.25f;
+    static float xPos = 0.0f;
+    static float yPos = 0.0f;
+
+    float angle_rad = g_angle * (M_PI / 180.0f);
+    float displacement = g_speed2d * dt;
+    // Move in heading direction
+    xPos += displacement * cosf(angle_rad);
+    yPos += displacement * sinf(angle_rad);
+
+    // 3) Create a 40×20 character map
+    //    We'll store row [0..19], col [0..39].
+    //    Then we print row=0 at the top.
+    char map[20][41]; // 40 columns + null terminator
+    for (int row = 0; row < 20; row++) {
+        for (int col = 0; col < 40; col++) {
+            map[row][col] = '0'; // or ' ' if you prefer spaces
+        }
+        map[row][40] = '\0'; // null-terminate each line
+    }
+    
+       // 4) Convert (xPos, yPos) to map coordinates.
+    //    We'll define the map center (20,10) as position (0,0).
+    //    1 cell = 1 meter (you can adjust scaleFactor as needed).
+    float scaleFactor = 1.0f;
+    int centerX = 20; 
+    int centerY = 10;
+
+    int mapX = centerX + (int)(xPos * scaleFactor);
+    int mapY = centerY - (int)(yPos * scaleFactor); // minus for typical screen coordinates
+
+    // 5) Clamp to [0..39] in X and [0..19] in Y
+    if (mapX < 0) mapX = 0;
+    if (mapX >= 40) mapX = 39;
+    if (mapY < 0) mapY = 0;
+    if (mapY >= 20) mapY = 19;
+
+    // 6) Convert speed to a digit [0..9]
+    //    If speed is > 9, clamp to '9'.
+    int speedDigit = (int)(g_speed2d + 0.5f); 
+    if (speedDigit < 0) speedDigit = 0;
+    if (speedDigit > 9) speedDigit = 9;
+
+    // 7) Place that digit on the map
+    map[mapY][mapX] = (char)('0' + speedDigit);
+
+    // 8) Print the map to the terminal
+    //    row=0 is top, row=19 is bottom
+    printf("\n");
+    for (int row = 0; row < 20; row++) {
+        printf("%s\n", map[row]);
+    }
+
+    // 9) Print debug info
+    printf("Speed=%.2f m/s, Angle=%.2f deg, Pos=(%.2f,%.2f)\n",
+           g_speed2d, g_angle, xPos, yPos);
+}
+
 void *ImuThread(void  *arg)
 {
   struct  imu_thread_param * param = (struct imu_thread_param *)arg;
@@ -2497,7 +2965,7 @@ void *ImuThread(void  *arg)
   struct  timespec  timer_state;
              // used to wake up every 10ms with wait_period() function,
              // similar to interrupt occuring every 10ms
-
+  
   // start 10ms timed wait
   wait_period_initialize( &timer_state );
   param->io->gpio->GPFSEL0.field.FSEL2 = GPFSEL_ALTERNATE_FUNCTION0;
@@ -2513,14 +2981,268 @@ void *ImuThread(void  *arg)
   param->io->bsc->C.field.INTR    = 0;
   param->io->bsc->C.field.I2CEN   = 1;
   param->io->bsc->C.field.CLEAR   = 1;
+  
+  size_t numPixels = param->scaled_width * param->scaled_height;
+  
+    
+    
+    struct draw_bitmap_multiwindow_handle_t * accX = draw_bitmap_create_window(param->scaled_width, param->scaled_height);
+    struct draw_bitmap_multiwindow_handle_t * accY = draw_bitmap_create_window(param->scaled_width, param->scaled_height);
+    struct draw_bitmap_multiwindow_handle_t * accZ = draw_bitmap_create_window(param->scaled_width, param->scaled_height);
+    struct draw_bitmap_multiwindow_handle_t * gyrX = draw_bitmap_create_window(param->scaled_width, param->scaled_height);
+    struct draw_bitmap_multiwindow_handle_t * gyrY = draw_bitmap_create_window(param->scaled_width, param->scaled_height);
+    struct draw_bitmap_multiwindow_handle_t * gyrZ = draw_bitmap_create_window(param->scaled_width, param->scaled_height);
+    
+    struct pixel_format_RGB *accXBuffer  = malloc(numPixels * sizeof(struct pixel_format_RGB));
+    struct pixel_format_RGB *accYBuffer   = malloc(numPixels * sizeof(struct pixel_format_RGB));
+    struct pixel_format_RGB *accZBuffer   = malloc(numPixels * sizeof(struct pixel_format_RGB));
+    struct pixel_format_RGB *gyrXBuffer   = malloc(numPixels * sizeof(struct pixel_format_RGB));
+    struct pixel_format_RGB *gyrYBuffer   = malloc(numPixels * sizeof(struct pixel_format_RGB));
+    struct pixel_format_RGB *gyrZBuffer   = malloc(numPixels * sizeof(struct pixel_format_RGB));
+
+    memcpy(accXBuffer,  param->scaled_RGB_data, numPixels * sizeof(struct pixel_format_RGB));
+    memcpy(accYBuffer,   param->scaled_RGB_data, numPixels * sizeof(struct pixel_format_RGB));
+    memcpy(accZBuffer,     param->scaled_RGB_data, numPixels * sizeof(struct pixel_format_RGB));
+    memcpy(gyrXBuffer, param->scaled_RGB_data, numPixels * sizeof(struct pixel_format_RGB));
+    memcpy(gyrYBuffer, param->scaled_RGB_data, numPixels * sizeof(struct pixel_format_RGB));
+    memcpy(gyrZBuffer, param->scaled_RGB_data, numPixels * sizeof(struct pixel_format_RGB));
+  
   while (!*(param->quit_flag))
   {
+  if(collectImu){
     read_accelerometer_gyroscope( param->calibration_accelerometer, param->calibration_gyroscope, param->io->bsc );
     read_magnetometer( param->calibration_magnetometer, param->io->bsc );
     printf( "\n" );
     wait_period( &timer_state, 10u );
-  }
+    }
+    struct timespec timer_state;
+    wait_period_initialize(&timer_state);
+    
 
+        
+        if (showAccX)
+        {
+            for (int i = 0; i < numPixels; i++) {
+                accXBuffer[i].R = 0;
+                accXBuffer[i].G = 0;
+                accXBuffer[i].B = 0;
+            }
+            
+            for (int x = 0; x < param->scaled_width - 1; x++) {
+                int index0 = (g_accX_idx + x) % MAX_SAMPLES;
+                int index1 = (g_accX_idx + x + 1) % MAX_SAMPLES;
+                int y0 = scale_to_pixel(g_accX[index0], ACC_MAX);
+                int y1 = scale_to_pixel(g_accX[index1], ACC_MAX);
+                
+                int dy = y1 - y0;
+                int steps = (abs(dy) == 0) ? 1 : abs(dy);
+                
+                for (int j = 0; j <= steps; j++) {
+                    int y = y0 + (dy * j) / steps;
+                    int pixelIndex = y * param->scaled_width + x;
+                    if (pixelIndex < numPixels) {
+                        accXBuffer[pixelIndex].R = 0;
+                        accXBuffer[pixelIndex].G = 255;
+                        accXBuffer[pixelIndex].B = 0;
+                    }
+                }
+            }
+            draw_bitmap_display(accX, accXBuffer);
+        }
+
+        if (showAccY)
+        {
+            for (int i = 0; i < numPixels; i++) {
+                accYBuffer[i].R = 0;
+                accYBuffer[i].G = 0;
+                accYBuffer[i].B = 0;
+            }
+            for (int x = 0; x < param->scaled_width - 1; x++) {
+                int index0 = (g_accY_idx + x) % MAX_SAMPLES;
+                int index1 = (g_accY_idx + x + 1) % MAX_SAMPLES;
+                int y0 = scale_to_pixel(g_accY[index0], ACC_MAX);
+                int y1 = scale_to_pixel(g_accY[index1], ACC_MAX);
+                int dy = y1 - y0;
+                int steps = (abs(dy) == 0) ? 1 : abs(dy);
+                for (int j = 0; j <= steps; j++) {
+                    int y = y0 + (dy * j) / steps;
+                    int pixelIndex = y * param->scaled_width + x;
+                    if (pixelIndex < numPixels) {
+                        accYBuffer[pixelIndex].R = 0;
+                        accYBuffer[pixelIndex].G = 255;
+                        accYBuffer[pixelIndex].B = 0;
+                    }
+                }
+            }
+            draw_bitmap_display(accY, accYBuffer);
+        }
+
+        if (showAccZ)
+        {
+            for (int i = 0; i < numPixels; i++) {
+                accZBuffer[i].R = 0;
+                accZBuffer[i].G = 0;
+                accZBuffer[i].B = 0;
+            }
+            for (int x = 0; x < param->scaled_width - 1; x++) {
+                int index0 = (g_accZ_idx + x) % MAX_SAMPLES;
+                int index1 = (g_accZ_idx + x + 1) % MAX_SAMPLES;
+                int y0 = scale_to_pixel(g_accZ[index0], ACC_MAX);
+                int y1 = scale_to_pixel(g_accZ[index1], ACC_MAX);
+                int dy = y1 - y0;
+                int steps = (abs(dy) == 0) ? 1 : abs(dy);
+                for (int j = 0; j <= steps; j++) {
+                    int y = y0 + (dy * j) / steps;
+                    int pixelIndex = y * param->scaled_width + x;
+                    if (pixelIndex < numPixels) {
+                        accZBuffer[pixelIndex].R = 0;
+                        accZBuffer[pixelIndex].G = 255;
+                        accZBuffer[pixelIndex].B = 0;
+                    }
+                }
+            }
+            draw_bitmap_display(accZ, accZBuffer);
+        }
+         
+        
+
+        if (showGyrX)
+        {
+            for (int i = 0; i < numPixels; i++) {
+                gyrXBuffer[i].R = 0;
+                gyrXBuffer[i].G = 0;
+                gyrXBuffer[i].B = 0;
+            }
+            for (int x = 0; x < param->scaled_width - 1; x++) {
+                int index0 = (g_gyrX_idx + x) % MAX_SAMPLES;
+                int index1 = (g_gyrX_idx + x + 1) % MAX_SAMPLES;
+                int y0 = scale_to_pixel(g_gyrX[index0], GYR_MAX);
+                int y1 = scale_to_pixel(g_gyrX[index1], GYR_MAX);
+                int dy = y1 - y0;
+                int steps = (abs(dy) == 0) ? 1 : abs(dy);
+                for (int j = 0; j <= steps; j++) {
+                    int y = y0 + (dy * j) / steps;
+                    int pixelIndex = y * param->scaled_width + x;
+                    if (pixelIndex < numPixels) {
+                        gyrXBuffer[pixelIndex].R = 0;
+                        gyrXBuffer[pixelIndex].G = 255;
+                        gyrXBuffer[pixelIndex].B = 0;
+                    }
+                }
+            }
+            draw_bitmap_display(gyrX, gyrXBuffer);
+        }
+        
+        if (showGyrY)
+        {
+            for (int i = 0; i < numPixels; i++) {
+                gyrYBuffer[i].R = 0;
+                gyrYBuffer[i].G = 0;
+                gyrYBuffer[i].B = 0;
+            }
+            for (int x = 0; x < param->scaled_width - 1; x++) {
+                int index0 = (g_gyrY_idx + x) % MAX_SAMPLES;
+                int index1 = (g_gyrY_idx + x + 1) % MAX_SAMPLES;
+                int y0 = scale_to_pixel(g_gyrY[index0], GYR_MAX);
+                int y1 = scale_to_pixel(g_gyrY[index1], GYR_MAX);
+                int dy = y1 - y0;
+                int steps = (abs(dy) == 0) ? 1 : abs(dy);
+                for (int j = 0; j <= steps; j++) {
+                    int y = y0 + (dy * j) / steps;
+                    int pixelIndex = y * param->scaled_width + x;
+                    if (pixelIndex < numPixels) {
+                        gyrYBuffer[pixelIndex].R = 0;
+                        gyrYBuffer[pixelIndex].G = 255;
+                        gyrYBuffer[pixelIndex].B = 0;
+                    }
+                }
+            }
+            draw_bitmap_display(gyrY, gyrYBuffer);
+        }
+        
+        if (showGyrZ)
+        {
+            for (int i = 0; i < numPixels; i++) {
+                gyrZBuffer[i].R = 0;
+                gyrZBuffer[i].G = 0;
+                gyrZBuffer[i].B = 0;
+            }
+            for (int x = 0; x < param->scaled_width - 1; x++) {
+                int index0 = (g_gyrZ_idx + x) % MAX_SAMPLES;
+                int index1 = (g_gyrZ_idx + x + 1) % MAX_SAMPLES;
+                int y0 = scale_to_pixel(g_gyrZ[index0], GYR_MAX);
+                int y1 = scale_to_pixel(g_gyrZ[index1], GYR_MAX);
+                int dy = y1 - y0;
+                int steps = (abs(dy) == 0) ? 1 : abs(dy);
+                for (int j = 0; j <= steps; j++) {
+                    int y = y0 + (dy * j) / steps;
+                    int pixelIndex = y * param->scaled_width + x;
+                    if (pixelIndex < numPixels) {
+                        gyrZBuffer[pixelIndex].R = 0;
+                        gyrZBuffer[pixelIndex].G = 255;
+                        gyrZBuffer[pixelIndex].B = 0;
+                    }
+                }
+            }
+            draw_bitmap_display(gyrZ, gyrZBuffer);
+        }
+        
+        if (!(FIFO_EMPTY( param->imuFifo )))
+      {
+        FIFO_REMOVE( param->imuFifo, &cmd2 );
+        switch (cmd2.command)
+        {          
+          case '7':
+          {
+            update_speed_2d();
+          }
+          break;
+          
+          case '8':
+          {
+            update_distance_2d();
+          }
+          break;
+          
+          case '9':
+          {
+            get_average_gyrZ_25();
+          }
+          break;
+          
+          case 'e':
+          {
+            save_raw_data_to_file();
+          }
+          break;
+          
+          case 'r':
+          {
+            update_traced_map_text();
+          }
+          break;
+          
+          default:
+          {
+ 
+            printf( " %s wrong cmd\n", param->name);
+
+          }
+        
+        
+
+    }
+
+  }
+   wait_period(&timer_state, 10);
+}
+ free(accXBuffer);
+    free(accYBuffer);
+    free(accZBuffer);
+    free(gyrXBuffer);
+    free(gyrYBuffer);
+    free(gyrZBuffer);
+  
   printf( "%s function done\n", param->name );
 
   return NULL;
@@ -2541,9 +3263,9 @@ int main( int argc, char * argv[] )
   pthread_t tPWM;
   pthread_t tk;
   pthread_t tc;
-  pthread_t tLineTrace;
-  pthread_t tLaser;
-  pthread_t tDisplay;
+  //pthread_t tLineTrace;
+  //pthread_t tLaser;
+  //pthread_t tDisplay;
   pthread_t tShapes;
   pthread_t tImu;
   struct fifo_t key_fifo   = {{}, 0, 0, PTHREAD_MUTEX_INITIALIZER};
@@ -2551,12 +3273,13 @@ int main( int argc, char * argv[] )
   struct fifo_t motor2Fifo    = {{}, 0, 0, PTHREAD_MUTEX_INITIALIZER};
   struct fifo_t pwmFifo = {{}, 0, 0, PTHREAD_MUTEX_INITIALIZER};
   struct fifo_t shapesFifo = {{}, 0, 0, PTHREAD_MUTEX_INITIALIZER};
+   struct fifo_t imuFifo = {{}, 0, 0, PTHREAD_MUTEX_INITIALIZER};
   bool quit_flag = false;
   io = import_registers();
-  handle = video_interface_open( "/dev/video0" );
+  handle = video_interface_open("/dev/video0");
   video_interface_set_mode_auto(handle);
   draw_bitmap_start(argc, argv);
-
+  
   unsigned int scaled_width = handle->configured_width / SCALE_REDUCTION_PER_AXIS;
   unsigned int scaled_height = handle->configured_height / SCALE_REDUCTION_PER_AXIS;
   global_scaled_width = scaled_width;
@@ -2568,12 +3291,12 @@ int main( int argc, char * argv[] )
   struct motor_thread_param     motor2Param  = {"m2", NULL, 22, 23,  &motor2Fifo, &quit_flag};
   struct pwm_thread_param       pwmParam    = {"pwm", NULL, 12, 13, io, &pwmFifo, &quit_flag};  
   struct key_thread_param       key_param   = {"key", &key_fifo, &quit_flag};
-  struct control_thread_param   con_param   = {"con", &key_fifo, &motor1Fifo, &motor2Fifo, &pwmFifo, &shapesFifo, &quit_flag};
-  struct line_trace_thread_param lineTraceParam = {"linetrace", &motor1Fifo, &motor2Fifo, &pwmFifo, &quit_flag, NULL, scaled_RGB_data, scaled_height, scaled_width};
-  struct camera_thread_param cameraParam = {handle, scaled_data, scaled_RGB_data, scaled_height, scaled_width, &quit_flag, argc, argv, handle_GUI_color};
-  struct laser_thread_param laserParam = {"laser", &motor1Fifo, &motor2Fifo, &pwmFifo, &quit_flag, NULL, scaled_RGB_data, scaled_height, scaled_width};
+  struct control_thread_param   con_param   = {"con", &key_fifo, &motor1Fifo, &motor2Fifo, &pwmFifo, &shapesFifo, &imuFifo, &quit_flag};
+  //struct line_trace_thread_param lineTraceParam = {"linetrace", &motor1Fifo, &motor2Fifo, &pwmFifo, &quit_flag, NULL, scaled_RGB_data, scaled_height, scaled_width};
+  //struct camera_thread_param cameraParam = {handle, scaled_data, scaled_RGB_data, scaled_height, scaled_width, &quit_flag, argc, argv, handle_GUI_color};
+  //struct laser_thread_param laserParam = {"laser", &motor1Fifo, &motor2Fifo, &pwmFifo, &quit_flag, NULL, scaled_RGB_data, scaled_height, scaled_width};
   struct shapes_thread_param shapeParam = {"shapes",&shapesFifo, &motor1Fifo, &motor2Fifo, &pwmFifo, &quit_flag};
-  struct imu_thread_param imuParam = {"imu", NULL , &calibration_accelerometer ,&calibration_gyroscope ,&calibration_magnetometer};
+  struct imu_thread_param imuParam = {"imu", io , NULL , &imuFifo, &calibration_accelerometer ,&calibration_gyroscope ,&calibration_magnetometer, &quit_flag, scaled_height, scaled_width, argc, argv, handle, scaled_data, scaled_RGB_data};
   
   if (io != NULL)
   {
@@ -2583,10 +3306,11 @@ int main( int argc, char * argv[] )
     enable_pwm_clock(io->cm, io->pwm);
 
    
-    lineTraceParam.gpio = io->gpio;
+    //lineTraceParam.gpio = io->gpio;
     motor1Param.gpio = io->gpio;
     motor2Param.gpio = io->gpio;
     pwmParam.gpio = io->gpio;
+    imuParam.gpio = io->gpio;
    
     printf("\n----------------------\n");
     printf("\n\n\n Welcome!\n\n w: forward\n s: stop\n x:backward\n a: left \n d: right \n o: increase degrees \n k: decrease degrees \n \n i: power up 5%\n j: power down 5%\nc: color image\nv: gray image\nb: black white image\nn: shrink image (black white)\n\n\n");
@@ -2597,9 +3321,9 @@ int main( int argc, char * argv[] )
     pthread_create(&tPWM, NULL, SpeedThread, (void *)&pwmParam);
     pthread_create(&tk, NULL, KeyRead,   (void *)&key_param);
     pthread_create(&tc, NULL, Control,   (void *)&con_param);
-    pthread_create(&tLineTrace, NULL, LineTraceThread, (void *)&lineTraceParam);
-    pthread_create(&tDisplay, NULL, DisplayThread, (void *)&cameraParam);
-    pthread_create(&tLaser, NULL, LaserThread, (void *)&laserParam);
+    //pthread_create(&tLineTrace, NULL, LineTraceThread, (void *)&lineTraceParam);
+    //pthread_create(&tDisplay, NULL, DisplayThread, (void *)&cameraParam);
+    //pthread_create(&tLaser, NULL, LaserThread, (void *)&laserParam);
     pthread_create(&tShapes, NULL, ShapesThread, (void *)&shapeParam);
     pthread_create(&tImu, NULL, ImuThread, (void *)&imuParam);
     // Join threads
@@ -2608,18 +3332,20 @@ int main( int argc, char * argv[] )
     pthread_join(tPWM, NULL);
     pthread_join(tk, NULL);
     pthread_join(tc, NULL);
-    pthread_join(tLineTrace, NULL);
-    pthread_join(tDisplay, NULL);
-    pthread_join(tLaser, NULL);
+    //pthread_join(tLineTrace, NULL);
+    //pthread_join(tDisplay, NULL);
+    //pthread_join(tLaser, NULL);
     pthread_join(tShapes, NULL);
     pthread_join(tImu, NULL);
    
     free(scaled_data);
     video_interface_close(handle);
-    //draw_bitmap_close_window(handle_GUI_color);
-    //draw_bitmap_close_window(handle_GUI_gray);
-    //draw_bitmap_close_window(handle_GUI_black_white);
-    //draw_bitmap_close_window(handle_GUI_shrinked);
+    draw_bitmap_close_window(accX);
+    draw_bitmap_close_window(accY);
+    draw_bitmap_close_window(accZ);
+    draw_bitmap_close_window(gyrX);
+    draw_bitmap_close_window(gyrY);
+    draw_bitmap_close_window(gyrZ);
     draw_bitmap_stop();
 
     /* main task finished  */
@@ -2634,7 +3360,7 @@ int main( int argc, char * argv[] )
   }
   else
   {
-    ; /* warning message already issued */
+    printf("Warning IO NULL"); /* warning message already issued */
   }
 
   printf( "main function done\n" );
