@@ -65,6 +65,8 @@ float g_gyrX[MAX_SAMPLES];
 float g_gyrY[MAX_SAMPLES];
 float g_gyrZ[MAX_SAMPLES];
 
+
+
 int g_accX_idx = 0;
 int g_accY_idx = 0;
 int g_accZ_idx = 0;
@@ -76,7 +78,9 @@ static float vx = 0.0f;
 static float vy = 0.0f;
 static float g_speed2d = 0.0f;
 static float g_distance2d = 0.0f;
-static float g_angle = 0.0f;
+float g_angle = 0.0f;
+float g_angle_offset = 0.0f;
+bool g_reset_angle_reference = false;
 
 union uint16_to_2uint8
 {
@@ -146,12 +150,23 @@ volatile bool showAccZ = false;
 volatile bool showGyrX = false;
 volatile bool showGyrY = false;
 volatile bool showGyrZ = false;
+volatile bool showMapWindow = false;
+volatile bool printImu = false;
 
 
 #define SHRUNK_W 64
 #define SHRUNK_H 48
 #define ACC_MAX 10.0f
 #define GYR_MAX 250.0f
+
+
+//Used for map
+#define TRAIL_LENGTH 25
+float trailX[TRAIL_LENGTH] = {0};
+float trailY[TRAIL_LENGTH] = {0};
+int trailIndex = 0;
+float g_mapXPos = 0.0f;
+float g_mapYPos = 0.0f;
 
 //static struct pixel_format_RGB g_shrunk_data[SHRUNK_W* SHRUNK_H];
 //static pthread_mutex_t g_shrunk_data_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -164,8 +179,12 @@ unsigned int global_scaled_width = 0;
 unsigned int global_scaled_height = 0;
 struct pixel_format_RGB *g_scaled_bw_data = NULL;
 
+
+
 //pthread_mutex_t g_scaled_bw_data_lock = PTHREAD_MUTEX_INITIALIZER;
 
+char traced_map[20][41] = {0};
+int traced_map_initialized = 0;
 
 int laserPointX = -1;
 int laserPointY = -1;
@@ -422,7 +441,12 @@ void *Control(void * arg)
                     modeSwitchFlag = true;
                   }
                     break;  
-                  
+                    
+                  case '0':
+                  {
+                      printImu = !printImu;
+                    }
+                  break;
                     case '1':
                   {
                       showAccX = !showAccX;
@@ -435,7 +459,7 @@ void *Control(void * arg)
                       break;
                   case '3':
                   {
-                      showAccY = !showAccY;
+                      showAccZ = !showAccZ;
                     }
                       break;
                   case '4':
@@ -491,11 +515,7 @@ void *Control(void * arg)
                       break;
                          case 'r':
                   {
-                      cmd2.command = 'e';
-                      if(!(FIFO_FULL(param->imuFifo)))
-                      {
-                        FIFO_INSERT(param->imuFifo, cmd2);
-                        }
+                      showMapWindow = !showMapWindow;
                     }
                       break;
                   
@@ -857,7 +877,13 @@ void *Control(void * arg)
                         }
                     }
                       break;
-                      
+                  
+                  case '0':
+                  {
+                      printImu = !printImu;
+                    }
+                    break;
+                  
                   case '1':
                   {
                       showAccX = !showAccX;
@@ -870,7 +896,7 @@ void *Control(void * arg)
                       break;
                   case '3':
                   {
-                      showAccY = !showAccY;
+                      showAccZ = !showAccZ;
                     }
                       break;
                   case '4':
@@ -926,11 +952,7 @@ void *Control(void * arg)
                       break;
                          case 'r':
                   {
-                      cmd2.command = 'e';
-                      if(!(FIFO_FULL(param->imuFifo)))
-                      {
-                        FIFO_INSERT(param->imuFifo, cmd2);
-                        }
+                      showMapWindow = !showMapWindow;
                     }
                       break;
                    
@@ -1029,7 +1051,12 @@ void *Control(void * arg)
                       collectImu = false;
                     }
                       break;
-                   
+                      
+                  case '0':
+                  {
+                      printImu = !printImu;
+                    }
+                  break;
                   case '1':
                   {
                       showAccX = !showAccX;
@@ -1042,7 +1069,7 @@ void *Control(void * arg)
                       break;
                   case '3':
                   {
-                      showAccY = !showAccY;
+                      showAccZ = !showAccZ;
                     }
                       break;
                   case '4':
@@ -1098,11 +1125,7 @@ void *Control(void * arg)
                       break;
                          case 'r':
                   {
-                      cmd2.command = 'e';
-                      if(!(FIFO_FULL(param->imuFifo)))
-                      {
-                        FIFO_INSERT(param->imuFifo, cmd2);
-                        }
+                      showMapWindow = !showMapWindow;
                     }
                       break;
                   
@@ -2278,7 +2301,8 @@ union MPU9250_transaction_field_data read_MPU9250_register( /* read a register, 
   union MPU9250_transaction transaction;
 
   read_MPU9250_registers( I2C_address, register_address, &(transaction.value[1]), 1, bsc );
-
+  
+  
   return transaction.field.data;
 }
 
@@ -2555,7 +2579,7 @@ void initialize_accelerometer_and_gyroscope(
 
   // based off https://github.com/brianc118/MPU9250/blob/master/MPU9250.cpp
 
-  calibrate_accelerometer_and_gyroscope( calibration_accelerometer, calibration_gyroscope, bsc );
+  //calibrate_accelerometer_and_gyroscope( calibration_accelerometer, calibration_gyroscope, bsc );
 
   // reset MPU9205
   transaction.PWR_MGMT_1.CLKSEL        = 0;
@@ -2677,6 +2701,187 @@ void initialize_magnetometer(
   return;
 }
 
+
+// READ M
+void read_magnetometer(
+    struct calibration_data *     calibration_magnetometer,
+    volatile struct bsc_register *bsc )
+{
+  uint8_t                               data_block[7];
+  union uint16_to_2uint8                MAG_XOUT;
+  union uint16_to_2uint8                MAG_YOUT;
+  union uint16_to_2uint8                MAG_ZOUT;
+  union MPU9250_transaction_field_data  transaction;
+
+  read_MPU9250_registers( AK8963_ADDRESS, AK8963_REGISTER_HXL, data_block, 7, bsc );
+  // read must start from HXL and read seven bytes so that ST2 is read and the AK8963 will start the next conversion
+  MAG_XOUT.field.L = data_block[0];
+  MAG_XOUT.field.H = data_block[1];
+  MAG_YOUT.field.L = data_block[2];
+  MAG_YOUT.field.H = data_block[3];
+  MAG_ZOUT.field.L = data_block[4];
+  MAG_ZOUT.field.H = data_block[5];
+  printf( "Mag X: %.2f uT\ty=%.2f uT\tz=%.2f uT\n",
+      MAG_XOUT.signed_value*calibration_magnetometer->offset_x,
+      MAG_YOUT.signed_value*calibration_magnetometer->offset_y,
+      MAG_ZOUT.signed_value*calibration_magnetometer->offset_z );
+
+  return;
+}
+
+//This will scale our graphed data to start at 120 and be between 0 and 240
+int scaleToPixel(float sensorValue, float sensorMax)
+{
+    float normalized = sensorValue / sensorMax;
+
+    if (normalized > 1.0f)
+    {
+        normalized = 1.0f;
+    }
+    if (normalized < -1.0f)
+    {
+       normalized = -1.0f;
+    }
+
+    int yPixel = (int)(120 - normalized * 120);
+
+    if (yPixel < 0)
+    { 
+      yPixel = 0;
+    }
+    if (yPixel >= 240)
+    {
+       yPixel = 239;
+    }
+    
+    return yPixel;
+}
+
+//Oppens file in append mode and prints the data to it.
+void saveToFile(void)
+{
+    //F open our txt
+    FILE *fp = fopen("hw9m1data.txt", "a");
+
+    //Gather samples
+    int idxAcc = (g_accX_idx - 1 + MAX_SAMPLES) % MAX_SAMPLES;
+    int idxGyr = (g_gyrX_idx - 1 + MAX_SAMPLES) % MAX_SAMPLES;
+
+    //Retrieve our data
+    float ax = g_accX[idxAcc];
+    float ay = g_accY[idxAcc];
+    float az = g_accZ[idxAcc];
+    float gx = g_gyrX[idxGyr];
+    float gy = g_gyrY[idxGyr];
+    float gz = g_gyrZ[idxGyr];
+
+    //print
+    fprintf(fp, "%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\n", ax, ay, az, gx, gy, gz);
+
+    fclose(fp);
+}
+
+//Returns our last 25 acc points for x and y
+void getAverageAcc25(float *avgAccX, float *avgAccY)
+{
+    float sumX = 0.0f, sumY = 0.0f;
+    for (int i = 0; i < 25; i++) {
+        int idxX = (g_accX_idx - 25 + i + MAX_SAMPLES) % MAX_SAMPLES;
+        int idxY = (g_accY_idx - 25 + i + MAX_SAMPLES) % MAX_SAMPLES;
+        sumX += g_accX[idxX];
+        sumY += g_accY[idxY];
+    }
+    *avgAccX = sumX / 25.0f;
+    *avgAccY = sumY / 25.0f;
+}
+
+//Updates our speed and sends it to a global variable
+void updateSpeed(void)
+{
+    float avgAccX, avgAccY;
+    getAverageAcc25(&avgAccX, &avgAccY);
+    if (fabs(avgAccX) < 0.15f) avgAccX = 0.0f;
+    if (fabs(avgAccY) < 0.15f) avgAccY = 0.0f;
+    float dt = 0.25f;
+
+    vx += avgAccX * dt;
+    vy += avgAccY * dt;
+
+    vx *= 0.5f;
+    vy *= 0.5f;
+
+    g_speed2d = sqrtf(vx * vx + vy * vy);
+}
+
+//Prints our speed
+void printSpeed(void)
+{
+    printf("Speed: %.2f m/s\n", g_speed2d);
+}
+
+//Updates our distance using speed
+void updateDistance(void)
+{
+    float dt = 0.25f;
+    g_distance2d += g_speed2d * dt;
+
+}
+
+//Prints our distance traveled
+void printDistance(void)
+{
+    printf("Distance Traveled: %.2f m\n", g_distance2d);
+}
+
+
+
+//Gets gyroscope z last 25 points
+float getAverageGYR25(void)
+{
+    float sum = 0.0f;
+    for (int i = 0; i < 25; i++) {
+        int idx = (g_gyrZ_idx - 25 + i + MAX_SAMPLES) % MAX_SAMPLES;
+        sum += g_gyrZ[idx];
+    }
+    return sum / 25.0f;
+}
+
+
+//Updates angle using gyroscope z plane (yaw)
+void updateAngle(void)
+{
+    float avgGyrZ = getAverageGYR25();
+    if (fabs(avgGyrZ) < 0.5f) avgGyrZ = 0.0f;
+    float dt = 0.25f;                      
+    g_angle += avgGyrZ * dt;
+
+}
+
+//Prints our angle (yaw)
+void printAngle(void)
+{
+    float displayAngle = g_angle - g_angle_offset;
+    printf("Angle (Z-axis): %.2f degrees\n", displayAngle);
+}
+
+
+//Updates the position we are at. (IMU BROKE COULD NOT TEST ANYMORE, BUT WAS WORKING OKAY BEFORE I BROKE IMU)
+void updatePosition(void)
+{
+    float dt = 0.25f;
+    float angleRad = g_angle * (M_PI / 180.0f);
+    float displacement = g_speed2d * dt;
+
+    g_mapXPos += displacement * cosf(angleRad);
+    g_mapYPos += displacement * sinf(angleRad);
+
+    trailX[trailIndex] = g_mapXPos;
+    trailY[trailIndex] = g_mapYPos;
+    trailIndex = (trailIndex + 1) % TRAIL_LENGTH;
+}
+
+
+
 // READ AG
 void read_accelerometer_gyroscope(
     struct calibration_data *     calibration_accelerometer,
@@ -2727,6 +2932,7 @@ void read_accelerometer_gyroscope(
     float accel_y_ms2 = (ACCEL_YOUT.signed_value*calibration_accelerometer->scale - calibration_accelerometer->offset_y)*9.81f;
     float accel_z_ms2 = (ACCEL_ZOUT.signed_value*calibration_accelerometer->scale - calibration_accelerometer->offset_z)*9.81f;
     
+    //Collect data globally
     g_accX[g_accX_idx] = accel_x_ms2;
     g_accY[g_accY_idx] = accel_y_ms2;
     g_accZ[g_accZ_idx] = accel_z_ms2;
@@ -2743,6 +2949,8 @@ void read_accelerometer_gyroscope(
     g_gyrY_idx = (g_gyrY_idx + 1) % MAX_SAMPLES;
     g_gyrZ_idx = (g_gyrZ_idx + 1) % MAX_SAMPLES;
     
+    //Print if user specified
+      if(printImu){
   printf( "Gyro X: %.2f deg\ty=%.2f deg\tz=%.2f deg\n",
       gyro_x_deg,
       gyro_y_deg,
@@ -2752,209 +2960,9 @@ void read_accelerometer_gyroscope(
       accel_x_ms2,
       accel_y_ms2,
       accel_z_ms2);
-
+      
+  }
   return;
-}
-
-
-// READ M
-void read_magnetometer(
-    struct calibration_data *     calibration_magnetometer,
-    volatile struct bsc_register *bsc )
-{
-  uint8_t                               data_block[7];
-  union uint16_to_2uint8                MAG_XOUT;
-  union uint16_to_2uint8                MAG_YOUT;
-  union uint16_to_2uint8                MAG_ZOUT;
-  union MPU9250_transaction_field_data  transaction;
-
-  read_MPU9250_registers( AK8963_ADDRESS, AK8963_REGISTER_HXL, data_block, 7, bsc );
-  // read must start from HXL and read seven bytes so that ST2 is read and the AK8963 will start the next conversion
-  MAG_XOUT.field.L = data_block[0];
-  MAG_XOUT.field.H = data_block[1];
-  MAG_YOUT.field.L = data_block[2];
-  MAG_YOUT.field.H = data_block[3];
-  MAG_ZOUT.field.L = data_block[4];
-  MAG_ZOUT.field.H = data_block[5];
-  printf( "Mag X: %.2f uT\ty=%.2f uT\tz=%.2f uT\n",
-      MAG_XOUT.signed_value*calibration_magnetometer->offset_x,
-      MAG_YOUT.signed_value*calibration_magnetometer->offset_y,
-      MAG_ZOUT.signed_value*calibration_magnetometer->offset_z );
-
-  return;
-}
-
-int scale_to_pixel(float sensor_value, float sensor_max)
-{
-    float normalized = sensor_value / sensor_max;
-
-    if (normalized > 1.0f)  normalized = 1.0f;
-    if (normalized < -1.0f) normalized = -1.0f;
-
-    int y_pixel = (int)(120 - normalized * 120);
-
-    if (y_pixel < 0) y_pixel = 0;
-    if (y_pixel >= 240) y_pixel = 239;
-
-    return y_pixel;
-}
-
-void save_raw_data_to_file(void)
-{
-    // Open file in append mode
-    FILE *fp = fopen("hw9m1data.txt", "a");
-    if (!fp) {
-        perror("Error opening hw9m1data.txt");
-        return;
-    }
-
-    // Get the current time
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    double t = ts.tv_sec + (ts.tv_nsec / 1e9);
-
-    // The most recent sample index for accelerometer, gyro
-    int idxAcc = (g_accX_idx - 1 + MAX_SAMPLES) % MAX_SAMPLES;
-    int idxGyr = (g_gyrX_idx - 1 + MAX_SAMPLES) % MAX_SAMPLES;
-
-    // Retrieve data
-    float ax = g_accX[idxAcc];
-    float ay = g_accY[idxAcc];
-    float az = g_accZ[idxAcc];
-    float gx = g_gyrX[idxGyr];
-    float gy = g_gyrY[idxGyr];
-    float gz = g_gyrZ[idxGyr];
-
-    // Print in one line, same format as operation 1
-    fprintf(fp, "%.3f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\t%.2f\n",
-            t, ax, ay, az, gx, gy, gz);
-
-    fclose(fp);
-}
-
-void get_average_acc_25(float *avgAccX, float *avgAccY)
-{
-    float sumX = 0.0f, sumY = 0.0f;
-    for (int i = 0; i < 25; i++) {
-        int idxX = (g_accX_idx - 25 + i + MAX_SAMPLES) % MAX_SAMPLES;
-        int idxY = (g_accY_idx - 25 + i + MAX_SAMPLES) % MAX_SAMPLES;
-        sumX += g_accX[idxX];
-        sumY += g_accY[idxY];
-    }
-    *avgAccX = sumX / 25.0f;
-    *avgAccY = sumY / 25.0f;
-}
-
-void update_speed_2d(void)
-{
-    float avgAccX, avgAccY;
-    get_average_acc_25(&avgAccX, &avgAccY);
-
-    // dt = 0.25 seconds (4 updates per second)
-    float dt = 0.25f;
-
-    // Integrate acceleration to update velocity components
-    vx += avgAccX * dt;
-    vy += avgAccY * dt;
-
-    // Compute scalar speed from the velocity vector
-    g_speed2d = sqrtf(vx * vx + vy * vy);
-
-    // Print current speed
-    printf("Speed (2D): %.2f m/s\n", g_speed2d);
-}
-
-void update_distance_2d(void)
-{
-    // dt = 0.25 seconds
-    float dt = 0.25f;
-    g_distance2d += g_speed2d * dt;
-
-    // Print total distance traveled
-    printf("Distance: %.2f m\n", g_distance2d);
-}
-
-
-float get_average_gyrZ_25(void)
-{
-    float sum = 0.0f;
-    for (int i = 0; i < 25; i++) {
-        int idx = (g_gyrZ_idx - 25 + i + MAX_SAMPLES) % MAX_SAMPLES;
-        sum += g_gyrZ[idx];
-    }
-    return sum / 25.0f;
-}
-
-void update_angle(void)
-{
-    float avgGz = get_average_gyrZ_25();
-    float dt = 0.25f;  // 250 ms update interval
-    
-    // Integrate gyroZ to update angle (deg)
-    g_angle += avgGz * dt;
-    
-    printf("Angle: %.2f deg\n", g_angle);
-}
-
-void update_traced_map_text(void)
-{
-
-    float dt = 0.25f;
-    static float xPos = 0.0f;
-    static float yPos = 0.0f;
-
-    float angle_rad = g_angle * (M_PI / 180.0f);
-    float displacement = g_speed2d * dt;
-    // Move in heading direction
-    xPos += displacement * cosf(angle_rad);
-    yPos += displacement * sinf(angle_rad);
-
-    // 3) Create a 40×20 character map
-    //    We'll store row [0..19], col [0..39].
-    //    Then we print row=0 at the top.
-    char map[20][41]; // 40 columns + null terminator
-    for (int row = 0; row < 20; row++) {
-        for (int col = 0; col < 40; col++) {
-            map[row][col] = '0'; // or ' ' if you prefer spaces
-        }
-        map[row][40] = '\0'; // null-terminate each line
-    }
-    
-       // 4) Convert (xPos, yPos) to map coordinates.
-    //    We'll define the map center (20,10) as position (0,0).
-    //    1 cell = 1 meter (you can adjust scaleFactor as needed).
-    float scaleFactor = 1.0f;
-    int centerX = 20; 
-    int centerY = 10;
-
-    int mapX = centerX + (int)(xPos * scaleFactor);
-    int mapY = centerY - (int)(yPos * scaleFactor); // minus for typical screen coordinates
-
-    // 5) Clamp to [0..39] in X and [0..19] in Y
-    if (mapX < 0) mapX = 0;
-    if (mapX >= 40) mapX = 39;
-    if (mapY < 0) mapY = 0;
-    if (mapY >= 20) mapY = 19;
-
-    // 6) Convert speed to a digit [0..9]
-    //    If speed is > 9, clamp to '9'.
-    int speedDigit = (int)(g_speed2d + 0.5f); 
-    if (speedDigit < 0) speedDigit = 0;
-    if (speedDigit > 9) speedDigit = 9;
-
-    // 7) Place that digit on the map
-    map[mapY][mapX] = (char)('0' + speedDigit);
-
-    // 8) Print the map to the terminal
-    //    row=0 is top, row=19 is bottom
-    printf("\n");
-    for (int row = 0; row < 20; row++) {
-        printf("%s\n", map[row]);
-    }
-
-    // 9) Print debug info
-    printf("Speed=%.2f m/s, Angle=%.2f deg, Pos=(%.2f,%.2f)\n",
-           g_speed2d, g_angle, xPos, yPos);
 }
 
 void *ImuThread(void  *arg)
@@ -2965,13 +2973,15 @@ void *ImuThread(void  *arg)
   struct  timespec  timer_state;
              // used to wake up every 10ms with wait_period() function,
              // similar to interrupt occuring every 10ms
-  
+  //printf("IMU Thread: Starting loop...\n");
   // start 10ms timed wait
   wait_period_initialize( &timer_state );
   param->io->gpio->GPFSEL0.field.FSEL2 = GPFSEL_ALTERNATE_FUNCTION0;
   param->io->gpio->GPFSEL0.field.FSEL3 = GPFSEL_ALTERNATE_FUNCTION0;
+  //printf("IMU Thread: Starting loop after intializing gpios ...\n");
+  calibrate_accelerometer_and_gyroscope(param->calibration_accelerometer, param->calibration_gyroscope, param->io->bsc);
   initialize_accelerometer_and_gyroscope( param->calibration_accelerometer, param->calibration_gyroscope, param->io->bsc );
-  initialize_magnetometer( param->calibration_magnetometer, param->io->bsc );
+  //printf("IMU Thread: Starting loop after intializing accelerometer ...\n");
   param->io->bsc->DIV.field.CDIV  = (PERIPHERAL_CLOCK*10)/400000;
   param->io->bsc->DEL.field.REDL  = 0x30;
   param->io->bsc->DEL.field.FEDL  = 0x30;
@@ -2981,7 +2991,7 @@ void *ImuThread(void  *arg)
   param->io->bsc->C.field.INTR    = 0;
   param->io->bsc->C.field.I2CEN   = 1;
   param->io->bsc->C.field.CLEAR   = 1;
-  
+  //printf("IMU Thread: Starting loop2...\n");
   size_t numPixels = param->scaled_width * param->scaled_height;
   
     
@@ -2992,34 +3002,41 @@ void *ImuThread(void  *arg)
     struct draw_bitmap_multiwindow_handle_t * gyrX = draw_bitmap_create_window(param->scaled_width, param->scaled_height);
     struct draw_bitmap_multiwindow_handle_t * gyrY = draw_bitmap_create_window(param->scaled_width, param->scaled_height);
     struct draw_bitmap_multiwindow_handle_t * gyrZ = draw_bitmap_create_window(param->scaled_width, param->scaled_height);
-    
+    struct draw_bitmap_multiwindow_handle_t * mapWindow = draw_bitmap_create_window(param->scaled_width, param->scaled_height);
+    //printf("IMU Thread: Starting loop3...\n");
     struct pixel_format_RGB *accXBuffer  = malloc(numPixels * sizeof(struct pixel_format_RGB));
     struct pixel_format_RGB *accYBuffer   = malloc(numPixels * sizeof(struct pixel_format_RGB));
     struct pixel_format_RGB *accZBuffer   = malloc(numPixels * sizeof(struct pixel_format_RGB));
     struct pixel_format_RGB *gyrXBuffer   = malloc(numPixels * sizeof(struct pixel_format_RGB));
     struct pixel_format_RGB *gyrYBuffer   = malloc(numPixels * sizeof(struct pixel_format_RGB));
     struct pixel_format_RGB *gyrZBuffer   = malloc(numPixels * sizeof(struct pixel_format_RGB));
-
+    struct pixel_format_RGB *mapBuffer   = malloc(numPixels * sizeof(struct pixel_format_RGB));
+   // printf("IMU Thread: Starting loop4...\n");
     memcpy(accXBuffer,  param->scaled_RGB_data, numPixels * sizeof(struct pixel_format_RGB));
     memcpy(accYBuffer,   param->scaled_RGB_data, numPixels * sizeof(struct pixel_format_RGB));
     memcpy(accZBuffer,     param->scaled_RGB_data, numPixels * sizeof(struct pixel_format_RGB));
     memcpy(gyrXBuffer, param->scaled_RGB_data, numPixels * sizeof(struct pixel_format_RGB));
     memcpy(gyrYBuffer, param->scaled_RGB_data, numPixels * sizeof(struct pixel_format_RGB));
     memcpy(gyrZBuffer, param->scaled_RGB_data, numPixels * sizeof(struct pixel_format_RGB));
-  
+    memcpy(mapBuffer, param->scaled_RGB_data, numPixels * sizeof(struct pixel_format_RGB));
+   //printf("IMU Thread: Starting loop5...\n");
   while (!*(param->quit_flag))
   {
+   // printf("IMU Thread: Starting inner quit loop...\n");
   if(collectImu){
+    //Read data and update all data
     read_accelerometer_gyroscope( param->calibration_accelerometer, param->calibration_gyroscope, param->io->bsc );
-    read_magnetometer( param->calibration_magnetometer, param->io->bsc );
-    printf( "\n" );
+      updateSpeed();
+      updateDistance();
+      updateAngle();
+      updatePosition();
     wait_period( &timer_state, 10u );
     }
     struct timespec timer_state;
     wait_period_initialize(&timer_state);
     
 
-        
+        //Displays acceleration for X on graph in green.
         if (showAccX)
         {
             for (int i = 0; i < numPixels; i++) {
@@ -3031,8 +3048,8 @@ void *ImuThread(void  *arg)
             for (int x = 0; x < param->scaled_width - 1; x++) {
                 int index0 = (g_accX_idx + x) % MAX_SAMPLES;
                 int index1 = (g_accX_idx + x + 1) % MAX_SAMPLES;
-                int y0 = scale_to_pixel(g_accX[index0], ACC_MAX);
-                int y1 = scale_to_pixel(g_accX[index1], ACC_MAX);
+                int y0 = scaleToPixel(g_accX[index0], ACC_MAX);
+                int y1 = scaleToPixel(g_accX[index1], ACC_MAX);
                 
                 int dy = y1 - y0;
                 int steps = (abs(dy) == 0) ? 1 : abs(dy);
@@ -3049,7 +3066,8 @@ void *ImuThread(void  *arg)
             }
             draw_bitmap_display(accX, accXBuffer);
         }
-
+        
+        //Displays acceleration for Y on graph in green.
         if (showAccY)
         {
             for (int i = 0; i < numPixels; i++) {
@@ -3060,8 +3078,8 @@ void *ImuThread(void  *arg)
             for (int x = 0; x < param->scaled_width - 1; x++) {
                 int index0 = (g_accY_idx + x) % MAX_SAMPLES;
                 int index1 = (g_accY_idx + x + 1) % MAX_SAMPLES;
-                int y0 = scale_to_pixel(g_accY[index0], ACC_MAX);
-                int y1 = scale_to_pixel(g_accY[index1], ACC_MAX);
+                int y0 = scaleToPixel(g_accY[index0], ACC_MAX);
+                int y1 = scaleToPixel(g_accY[index1], ACC_MAX);
                 int dy = y1 - y0;
                 int steps = (abs(dy) == 0) ? 1 : abs(dy);
                 for (int j = 0; j <= steps; j++) {
@@ -3077,6 +3095,7 @@ void *ImuThread(void  *arg)
             draw_bitmap_display(accY, accYBuffer);
         }
 
+        //Displays acceleration for Z on graph in green.
         if (showAccZ)
         {
             for (int i = 0; i < numPixels; i++) {
@@ -3087,8 +3106,8 @@ void *ImuThread(void  *arg)
             for (int x = 0; x < param->scaled_width - 1; x++) {
                 int index0 = (g_accZ_idx + x) % MAX_SAMPLES;
                 int index1 = (g_accZ_idx + x + 1) % MAX_SAMPLES;
-                int y0 = scale_to_pixel(g_accZ[index0], ACC_MAX);
-                int y1 = scale_to_pixel(g_accZ[index1], ACC_MAX);
+                int y0 = scaleToPixel(g_accZ[index0], ACC_MAX);
+                int y1 = scaleToPixel(g_accZ[index1], ACC_MAX);
                 int dy = y1 - y0;
                 int steps = (abs(dy) == 0) ? 1 : abs(dy);
                 for (int j = 0; j <= steps; j++) {
@@ -3105,7 +3124,7 @@ void *ImuThread(void  *arg)
         }
          
         
-
+        //Displays GYR for X on graph in green.
         if (showGyrX)
         {
             for (int i = 0; i < numPixels; i++) {
@@ -3116,8 +3135,8 @@ void *ImuThread(void  *arg)
             for (int x = 0; x < param->scaled_width - 1; x++) {
                 int index0 = (g_gyrX_idx + x) % MAX_SAMPLES;
                 int index1 = (g_gyrX_idx + x + 1) % MAX_SAMPLES;
-                int y0 = scale_to_pixel(g_gyrX[index0], GYR_MAX);
-                int y1 = scale_to_pixel(g_gyrX[index1], GYR_MAX);
+                int y0 = scaleToPixel(g_gyrX[index0], GYR_MAX);
+                int y1 = scaleToPixel(g_gyrX[index1], GYR_MAX);
                 int dy = y1 - y0;
                 int steps = (abs(dy) == 0) ? 1 : abs(dy);
                 for (int j = 0; j <= steps; j++) {
@@ -3133,6 +3152,7 @@ void *ImuThread(void  *arg)
             draw_bitmap_display(gyrX, gyrXBuffer);
         }
         
+        //Displays GYR for Y on graph in green.
         if (showGyrY)
         {
             for (int i = 0; i < numPixels; i++) {
@@ -3143,8 +3163,8 @@ void *ImuThread(void  *arg)
             for (int x = 0; x < param->scaled_width - 1; x++) {
                 int index0 = (g_gyrY_idx + x) % MAX_SAMPLES;
                 int index1 = (g_gyrY_idx + x + 1) % MAX_SAMPLES;
-                int y0 = scale_to_pixel(g_gyrY[index0], GYR_MAX);
-                int y1 = scale_to_pixel(g_gyrY[index1], GYR_MAX);
+                int y0 = scaleToPixel(g_gyrY[index0], GYR_MAX);
+                int y1 = scaleToPixel(g_gyrY[index1], GYR_MAX);
                 int dy = y1 - y0;
                 int steps = (abs(dy) == 0) ? 1 : abs(dy);
                 for (int j = 0; j <= steps; j++) {
@@ -3160,6 +3180,7 @@ void *ImuThread(void  *arg)
             draw_bitmap_display(gyrY, gyrYBuffer);
         }
         
+        //Displays GYR for Z on graph in green.
         if (showGyrZ)
         {
             for (int i = 0; i < numPixels; i++) {
@@ -3170,8 +3191,8 @@ void *ImuThread(void  *arg)
             for (int x = 0; x < param->scaled_width - 1; x++) {
                 int index0 = (g_gyrZ_idx + x) % MAX_SAMPLES;
                 int index1 = (g_gyrZ_idx + x + 1) % MAX_SAMPLES;
-                int y0 = scale_to_pixel(g_gyrZ[index0], GYR_MAX);
-                int y1 = scale_to_pixel(g_gyrZ[index1], GYR_MAX);
+                int y0 = scaleToPixel(g_gyrZ[index0], GYR_MAX);
+                int y1 = scaleToPixel(g_gyrZ[index1], GYR_MAX);
                 int dy = y1 - y0;
                 int steps = (abs(dy) == 0) ? 1 : abs(dy);
                 for (int j = 0; j <= steps; j++) {
@@ -3187,6 +3208,39 @@ void *ImuThread(void  *arg)
             draw_bitmap_display(gyrZ, gyrZBuffer);
         }
         
+        //Displays where our car went on map in light blue. This should work unfortunately I soldered my IMU upside down, and forgot it would affect my testing.
+        //When I went to test it I broke it, so I have to submit what I have.
+        if (showMapWindow)
+        {
+            
+            //for (int i = 0; i < numPixels; i++) {
+            //    mapBuffer[i].R = 0;
+            //    mapBuffer[i].G = 0;
+            //    mapBuffer[i].B = 0;
+            //}
+
+            int centerX = param->scaled_width / 2;
+            int centerY = param->scaled_height / 2;
+            float pixelsPerMeter = 15.0f;
+
+            for (int i = 0; i < TRAIL_LENGTH; i++) {
+                int dx = (int)(trailX[i] * pixelsPerMeter);
+                int dy = (int)(trailY[i] * pixelsPerMeter);
+
+                int px = centerX + dx;
+                int py = centerY - dy;
+
+                if (px >= 0 && px < param->scaled_width && py >= 0 && py < param->scaled_height) {
+                    int index = py * param->scaled_width + px;
+                    mapBuffer[index].R = 0;
+                    mapBuffer[index].G = 255;
+                    mapBuffer[index].B = 255;
+                }
+            }
+
+            draw_bitmap_display(mapWindow, mapBuffer);
+        }
+        
         if (!(FIFO_EMPTY( param->imuFifo )))
       {
         FIFO_REMOVE( param->imuFifo, &cmd2 );
@@ -3194,31 +3248,25 @@ void *ImuThread(void  *arg)
         {          
           case '7':
           {
-            update_speed_2d();
+            saveToFile();
           }
           break;
           
           case '8':
           {
-            update_distance_2d();
+            printSpeed();
           }
           break;
           
           case '9':
           {
-            get_average_gyrZ_25();
+            printDistance();
           }
           break;
           
           case 'e':
           {
-            save_raw_data_to_file();
-          }
-          break;
-          
-          case 'r':
-          {
-            update_traced_map_text();
+            printAngle();
           }
           break;
           
@@ -3234,9 +3282,9 @@ void *ImuThread(void  *arg)
     }
 
   }
-   wait_period(&timer_state, 10);
+   wait_period(&timer_state, 25u);
 }
- free(accXBuffer);
+    free(accXBuffer);
     free(accYBuffer);
     free(accZBuffer);
     free(gyrXBuffer);
@@ -3313,7 +3361,7 @@ int main( int argc, char * argv[] )
     imuParam.gpio = io->gpio;
    
     printf("\n----------------------\n");
-    printf("\n\n\n Welcome!\n\n w: forward\n s: stop\n x:backward\n a: left \n d: right \n o: increase degrees \n k: decrease degrees \n \n i: power up 5%\n j: power down 5%\nc: color image\nv: gray image\nb: black white image\nn: shrink image (black white)\n\n\n");
+    printf("\n\n\n Welcome!\n\n w: forward\n s: stop\n x:backward\n a: left \n d: right \n o: increase degrees \n k: decrease degrees \n \n i: power up 5%\n j: power down 5%\nc: color image\nv: gray image\nb: black white image\nn: shrink image (black white)\n 1: ACCX GRAPH \n 2: ACCY GRAPH \n 3: ACCZ GRAPH \n 4: GYRX GRAPH \n 5: GYRY GRAPH \n 6: GYRZ GRAPH \n 7: PRINT TO FILE  \n 8: DISPLAY SPEED  \n 9: DISPLAY DISTANCE 0: PRINT IMU DATA e: Display angle r: print map. \n \n\n\n");
     printf("\n----------------------\n");
     // Create three threads our threase and then join them once the q command is hit
     pthread_create(&tMotor1, NULL, Motor1Thread, (void *)&motor1Param);
